@@ -1,0 +1,18 @@
+# macOS
+.DS_Store
+
+# Local editor settings
+.zed/
+
+# Local tooling caches
+.cache/
+
+# CMake and build output
+/build/
+/cmake-build-*/
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+/compile_commands.json
+/Makefile
+
