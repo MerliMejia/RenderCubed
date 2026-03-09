@@ -6,11 +6,14 @@
 #include "renderable/Sampler.h"
 #include "renderable/Texture.h"
 #include "renderer/ForwardRenderer.h"
+#include "renderer/OpaqueMeshPass.h"
+#include "renderer/PipelineSpec.h"
 #include <assert.h>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <memory>
 
 #if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
 #include <vulkan/vulkan_raii.hpp>
@@ -61,8 +64,9 @@ private:
 
   void initVulkan() {
     backend.initialize(appWindow, backendConfig);
-    forwardRenderer.initialize(deviceContext(), swapchainContext(),
-                               SHADER_PATH);
+    forwardRenderer.addPass(
+        std::make_unique<OpaqueMeshPass>(PipelineSpec{.shaderPath = SHADER_PATH}));
+    forwardRenderer.initialize(deviceContext(), swapchainContext());
     // Per texture init
     texture.create(TEXTURE_PATH, commandContext(), deviceContext());
     sampler.create(deviceContext());
@@ -90,7 +94,7 @@ private:
 
   void recreateSwapChain() {
     backend.recreateSwapchain(appWindow);
-    forwardRenderer.recreate(deviceContext(), swapchainContext(), SHADER_PATH);
+    forwardRenderer.recreate(deviceContext(), swapchainContext());
   }
 
   void updateUniformBuffer(uint32_t currentImage) {
