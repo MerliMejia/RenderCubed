@@ -76,8 +76,8 @@ target_compile_definitions(
 )
 
 set(RENDERCUBED_SHADER_DIR ${CMAKE_SOURCE_DIR}/assets/shaders)
-set(RENDERCUBED_SLANG_SOURCE ${RENDERCUBED_SHADER_DIR}/27_shader_depth.slang)
-set(RENDERCUBED_SLANG_OUTPUT ${RENDERCUBED_SHADER_DIR}/slang.spv)
+set(RENDERCUBED_SLANG_SOURCE ${RENDERCUBED_SHADER_DIR}/test_pass.slang)
+set(RENDERCUBED_SLANG_OUTPUT ${RENDERCUBED_SHADER_DIR}/test_pass.spv)
 
 find_program(RENDERCUBED_SLANGC_EXECUTABLE NAMES slangc)
 if(RENDERCUBED_SLANGC_EXECUTABLE AND EXISTS ${RENDERCUBED_SLANG_SOURCE})
@@ -96,7 +96,7 @@ if(RENDERCUBED_SLANGC_EXECUTABLE AND EXISTS ${RENDERCUBED_SLANG_SOURCE})
   add_custom_target(rendercubed_shaders DEPENDS ${RENDERCUBED_SLANG_OUTPUT})
   add_dependencies(RenderCubed rendercubed_shaders)
 else()
-  message(WARNING "slangc not found (or source missing). Install slangc to auto-generate assets/shaders/slang.spv.")
+  message(WARNING "slangc not found (or source missing). Install slangc to auto-generate assets/shaders/test_pass.spv.")
 endif()
 
 target_link_libraries(

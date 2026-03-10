@@ -1,19 +1,14 @@
 #include "backend/AppWindow.h"
 #include "backend/VulkanBackend.h"
-#include "renderable/DescriptorBindings.h"
-#include "renderable/FrameUniforms.h"
 #include "renderable/Mesh.h"
-#include "renderable/Sampler.h"
-#include "renderable/Texture.h"
 #include "renderer/ForwardRenderer.h"
-#include "renderer/OpaqueMeshPass.h"
 #include "renderer/PipelineSpec.h"
-#include <assert.h>
-#include <chrono>
-#include <cstdlib>
-#include <cstring>
-#include <iostream>
+#include "renderer/TestPass.h"
 #include <memory>
+
+#include <cstdlib>
+#include <iostream>
+#include <vector>
 
 #if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
 #include <vulkan/vulkan_raii.hpp>
@@ -21,18 +16,13 @@
 import vulkan_hpp;
 #endif
 
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtx/hash.hpp>
-
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
-const std::string ASSET_PATH = "assets";
-const std::string MODEL_PATH = ASSET_PATH + "/models/viking_room.obj";
-const std::string TEXTURE_PATH = ASSET_PATH + "/textures/viking_room.png";
-const std::string SHADER_PATH = ASSET_PATH + "/shaders/slang.spv";
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+const std::string ASSET_PATH = "assets";
+const std::string SHADER_PATH = ASSET_PATH + "/shaders/test_pass.spv";
 
-class HelloTriangleApplication {
+class RenderCubedApplication {
 public:
   void run() {
     initWindow();
@@ -44,41 +34,50 @@ public:
 private:
   AppWindow appWindow;
   VulkanBackend backend;
-  BackendConfig backendConfig{.appName = "App Window",
+  BackendConfig backendConfig{.appName = "RenderCubed",
                               .maxFramesInFlight = MAX_FRAMES_IN_FLIGHT};
 
   DeviceContext &deviceContext() { return backend.device(); }
   SwapchainContext &swapchainContext() { return backend.swapchain(); }
   CommandContext &commandContext() { return backend.commands(); }
-  FrameSync &frameSync() { return backend.sync(); }
 
-  // For now just 1 mesh, at some point should be more.
   Mesh mesh;
-  Texture texture;
-  Sampler sampler;
-  FrameUniforms frameUniforms;
-  DescriptorBindings descriptorBindings;
   ForwardRenderer forwardRenderer;
+  TestPass *testPass = nullptr;
 
-  void initWindow() { appWindow.create(WIDTH, HEIGHT, "App Window"); }
+  void initWindow() { appWindow.create(WIDTH, HEIGHT, "RenderCubed"); }
 
   void initVulkan() {
     backend.initialize(appWindow, backendConfig);
-    forwardRenderer.addPass(
-        std::make_unique<OpaqueMeshPass>(PipelineSpec{.shaderPath = SHADER_PATH}));
-    forwardRenderer.initialize(deviceContext(), swapchainContext());
-    // Per texture init
-    texture.create(TEXTURE_PATH, commandContext(), deviceContext());
-    sampler.create(deviceContext());
-    // Per mesh init
-    mesh.loadModel(MODEL_PATH);
+
+    mesh.setGeometry(
+        {
+            Vertex{.pos = {0.0f, -0.5f, 0.0f},
+                   .color = {1.0f, 1.0f, 1.0f},
+                   .texCoord = {0.5f, 1.0f}},
+            Vertex{.pos = {0.5f, 0.5f, 0.0f},
+                   .color = {1.0f, 1.0f, 1.0f},
+                   .texCoord = {1.0f, 0.0f}},
+            Vertex{.pos = {-0.5f, 0.5f, 0.0f},
+                   .color = {1.0f, 1.0f, 1.0f},
+                   .texCoord = {0.0f, 0.0f}},
+        },
+        {0, 1, 2});
     mesh.createVertexBuffer(commandContext(), deviceContext());
     mesh.createIndexBuffer(commandContext(), deviceContext());
-    //................
-    frameUniforms.create(deviceContext(), MAX_FRAMES_IN_FLIGHT);
-    descriptorBindings.create(
-        deviceContext(), forwardRenderer.descriptorSetLayout(), frameUniforms,
-        texture, sampler, MAX_FRAMES_IN_FLIGHT);
+
+    auto pass = std::make_unique<TestPass>(
+        PipelineSpec{.shaderPath = SHADER_PATH,
+                     .cullMode = vk::CullModeFlagBits::eNone},
+        MAX_FRAMES_IN_FLIGHT);
+
+    pass->setColor1({1.0f, 0.0f, 0.0f, 1.0f});
+    pass->setColor2({0.0f, 1.0f, 0.0f, 1.0f});
+    pass->setColor3({0.0f, 0.0f, 1.0f, 1.0f});
+
+    testPass = pass.get();
+    forwardRenderer.addPass(std::move(pass));
+    forwardRenderer.initialize(deviceContext(), swapchainContext());
   }
 
   void mainLoop() {
@@ -97,38 +96,29 @@ private:
     forwardRenderer.recreate(deviceContext(), swapchainContext());
   }
 
-  void updateUniformBuffer(uint32_t currentImage) {
-    static auto startTime = std::chrono::high_resolution_clock::now();
-
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    float time = std::chrono::duration<float>(currentTime - startTime).count();
-
-    UniformBufferObject ubo{};
-    ubo.model = rotate(glm::mat4(1.0f), time * glm::radians(90.0f),
-                       glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.view = lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f),
-                      glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.proj = glm::perspective(
-        glm::radians(45.0f),
-        static_cast<float>(swapchainContext().extent2D().width) /
-            static_cast<float>(swapchainContext().extent2D().height),
-        0.1f, 10.0f);
-    ubo.proj[1][1] *= -1;
-
-    frameUniforms.write(currentImage, ubo);
-  }
-
   void drawFrame() {
     auto frameState = backend.beginFrame(appWindow);
     if (!frameState) {
       recreateSwapChain();
       return;
     }
-    updateUniformBuffer(frameState->frameIndex);
-    forwardRenderer.record(
-        commandContext().commandBuffer(frameState->frameIndex),
-        swapchainContext(), mesh, descriptorBindings, frameState->frameIndex,
-        frameState->imageIndex);
+
+    static auto startTime = std::chrono::high_resolution_clock::now();
+    auto currentTime = std::chrono::high_resolution_clock::now();
+    float elapsed =
+        std::chrono::duration<float>(currentTime - startTime).count();
+
+    uint32_t flag = static_cast<uint32_t>(elapsed / 1.0f) % 3;
+    testPass->setFlag(flag);
+
+    auto &commandBuffer =
+        commandContext().commandBuffer(frameState->frameIndex);
+    std::vector<RenderItem> renderItems = {
+        RenderItem{.mesh = &mesh, .descriptorBindings = nullptr}};
+
+    forwardRenderer.record(commandBuffer, swapchainContext(), renderItems,
+                           frameState->frameIndex, frameState->imageIndex);
+
     if (backend.endFrame(*frameState, appWindow)) {
       recreateSwapChain();
     }
@@ -137,7 +127,7 @@ private:
 
 int main() {
   try {
-    HelloTriangleApplication app;
+    RenderCubedApplication app;
     app.run();
   } catch (const std::exception &e) {
     std::cerr << e.what() << std::endl;

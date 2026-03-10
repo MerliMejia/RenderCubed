@@ -54,6 +54,12 @@ template <> struct std::hash<Vertex> {
 
 class Mesh {
 public:
+  void setGeometry(std::vector<Vertex> meshVertices,
+                   std::vector<uint32_t> meshIndices) {
+    vertices = std::move(meshVertices);
+    indices = std::move(meshIndices);
+  }
+
   void loadModel(std::string path) {
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;

@@ -44,14 +44,24 @@ public:
               SwapchainContext &swapchainContext,
               const std::vector<RenderItem> &renderItems, uint32_t frameIndex,
               uint32_t imageIndex) {
+    commandBuffer.begin({});
+    RenderPassContext context{.commandBuffer = commandBuffer,
+                              .swapchainContext = swapchainContext,
+                              .frameIndex = frameIndex,
+                              .imageIndex = imageIndex};
     for (auto &renderPass : passes) {
-      renderPass->record(commandBuffer, swapchainContext, renderItems,
-                         frameIndex, imageIndex);
+      renderPass->record(context, renderItems);
     }
+    commandBuffer.end();
   }
 
   vk::raii::DescriptorSetLayout &descriptorSetLayout() {
-    return passes.front()->descriptorSetLayout();
+    auto *layout = passes.front()->descriptorSetLayout();
+    if (layout == nullptr) {
+      throw std::runtime_error(
+          "First render pass does not expose a descriptor set layout");
+    }
+    return *layout;
   }
 
 private:

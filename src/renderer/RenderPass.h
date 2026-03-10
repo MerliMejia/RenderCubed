@@ -17,6 +17,13 @@ struct RenderItem {
   DescriptorBindings *descriptorBindings = nullptr;
 };
 
+struct RenderPassContext {
+  vk::raii::CommandBuffer &commandBuffer;
+  SwapchainContext &swapchainContext;
+  uint32_t frameIndex = 0;
+  uint32_t imageIndex = 0;
+};
+
 class RenderPass {
 public:
   virtual ~RenderPass() = default;
@@ -25,9 +32,9 @@ public:
                           SwapchainContext &swapchainContext) = 0;
   virtual void recreate(DeviceContext &deviceContext,
                         SwapchainContext &swapchainContext) = 0;
-  virtual void record(vk::raii::CommandBuffer &commandBuffer,
-                      SwapchainContext &swapchainContext,
-                      const std::vector<RenderItem> &renderItems,
-                      uint32_t frameIndex, uint32_t imageIndex) = 0;
-  virtual vk::raii::DescriptorSetLayout &descriptorSetLayout() = 0;
+  virtual void record(const RenderPassContext &context,
+                      const std::vector<RenderItem> &renderItems) = 0;
+  virtual vk::raii::DescriptorSetLayout *descriptorSetLayout() {
+    return nullptr;
+  }
 };
