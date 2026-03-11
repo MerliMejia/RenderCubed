@@ -58,25 +58,10 @@ private:
 
   PipelineSpec solidSpec{
       .shaderPath = "assets/shaders/solid_transform_pass.spv",
-      .vertexEntry = "vertMain",
-      .fragmentEntry = "fragMain",
-      .topology = vk::PrimitiveTopology::eTriangleList,
-      .polygonMode = vk::PolygonMode::eFill,
-      .cullMode = vk::CullModeFlagBits::eNone,
-      .frontFace = vk::FrontFace::eCounterClockwise,
-      .enableDepthTest = true,
-      .enableDepthWrite = true,
-      .enableBlending = false,
   };
 
   PipelineSpec textureSpec{
       .shaderPath = "assets/shaders/texture_pass.spv",
-      .vertexEntry = "vertMain",
-      .fragmentEntry = "fragMain",
-      .topology = vk::PrimitiveTopology::eTriangleList,
-      .polygonMode = vk::PolygonMode::eFill,
-      .cullMode = vk::CullModeFlagBits::eNone,
-      .frontFace = vk::FrontFace::eCounterClockwise,
       .enableDepthTest = false,
       .enableDepthWrite = false,
       .enableBlending = false,
@@ -84,15 +69,8 @@ private:
 
   PipelineSpec debugPresentSpec{
       .shaderPath = "assets/shaders/debug_present_pass.spv",
-      .vertexEntry = "vertMain",
-      .fragmentEntry = "fragMain",
-      .topology = vk::PrimitiveTopology::eTriangleList,
-      .polygonMode = vk::PolygonMode::eFill,
-      .cullMode = vk::CullModeFlagBits::eNone,
-      .frontFace = vk::FrontFace::eCounterClockwise,
       .enableDepthTest = false,
       .enableDepthWrite = false,
-      .enableBlending = false,
   };
 
   void initWindow() { window.create(WIDTH, HEIGHT, "Double Pass"); }

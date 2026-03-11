@@ -14,7 +14,7 @@ struct PipelineSpec {
   std::string fragmentEntry = "fragMain";
   vk::PrimitiveTopology topology = vk::PrimitiveTopology::eTriangleList;
   vk::PolygonMode polygonMode = vk::PolygonMode::eFill;
-  vk::CullModeFlags cullMode = vk::CullModeFlagBits::eBack;
+  vk::CullModeFlags cullMode = vk::CullModeFlagBits::eNone;
   vk::FrontFace frontFace = vk::FrontFace::eCounterClockwise;
   bool enableDepthTest = true;
   bool enableDepthWrite = true;

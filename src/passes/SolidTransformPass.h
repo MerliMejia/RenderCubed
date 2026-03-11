@@ -6,7 +6,9 @@
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #define GLM_ENABLE_EXPERIMENTAL
+#include <chrono>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 struct SolidTransformData {
   glm::mat4 model;
@@ -35,7 +37,13 @@ private:
   SolidTransformData buildUniformData(uint32_t frameIndex) const override {
     SolidTransformData data{};
 
-    data.model = glm::mat4(1.0f);
+    const auto now = std::chrono::steady_clock::now();
+    const float elapsedSeconds =
+        std::chrono::duration<float>(now - startTime).count();
+    const float rotationRadians = elapsedSeconds * glm::radians(45.0f);
+
+    data.model = glm::rotate(glm::mat4(1.0f), rotationRadians,
+                             glm::vec3(0.0f, 0.0f, 1.0f));
 
     data.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f),  // camera
                             glm::vec3(0.0f, 0.0f, 0.0f),  // target
@@ -61,4 +69,7 @@ private:
                                                 offsetof(PositionUvVertex, uv)),
         }};
   }
+
+  const std::chrono::steady_clock::time_point startTime =
+      std::chrono::steady_clock::now();
 };
