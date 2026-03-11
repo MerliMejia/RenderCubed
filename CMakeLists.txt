@@ -1,22 +1,22 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(RenderCubed VERSION 0.1.0 LANGUAGES CXX)
+project(Abstracto VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "Export compile_commands.json" FORCE)
 
-option(RENDERCUBED_FETCH_DEPS "Fetch GLFW/GLM/STB/TinyObjLoader when missing" ON)
+option(ABSTRACTO_FETCH_DEPS "Fetch GLFW/GLM/STB/TinyObjLoader when missing" ON)
 
 find_package(Vulkan REQUIRED)
 
-if(RENDERCUBED_FETCH_DEPS)
+if(ABSTRACTO_FETCH_DEPS)
   include(FetchContent)
 endif()
 
 find_package(glfw3 QUIET)
-if(NOT glfw3_FOUND AND RENDERCUBED_FETCH_DEPS)
+if(NOT glfw3_FOUND AND ABSTRACTO_FETCH_DEPS)
   FetchContent_Declare(
     glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
@@ -26,7 +26,7 @@ if(NOT glfw3_FOUND AND RENDERCUBED_FETCH_DEPS)
 endif()
 
 find_package(glm CONFIG QUIET)
-if(NOT glm_FOUND AND RENDERCUBED_FETCH_DEPS)
+if(NOT glm_FOUND AND ABSTRACTO_FETCH_DEPS)
   FetchContent_Declare(
     glm
     GIT_REPOSITORY https://github.com/g-truc/glm.git
@@ -35,7 +35,7 @@ if(NOT glm_FOUND AND RENDERCUBED_FETCH_DEPS)
   FetchContent_MakeAvailable(glm)
 endif()
 
-if(RENDERCUBED_FETCH_DEPS)
+if(ABSTRACTO_FETCH_DEPS)
   FetchContent_Declare(
     stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
@@ -52,101 +52,101 @@ if(RENDERCUBED_FETCH_DEPS)
 endif()
 
 if(TARGET glfw)
-  set(RENDERCUBED_GLFW_TARGET glfw)
+  set(ABSTRACTO_GLFW_TARGET glfw)
 elseif(TARGET glfw::glfw)
-  set(RENDERCUBED_GLFW_TARGET glfw::glfw)
+  set(ABSTRACTO_GLFW_TARGET glfw::glfw)
 else()
-  message(FATAL_ERROR "GLFW not found. Install it or set RENDERCUBED_FETCH_DEPS=ON.")
+  message(FATAL_ERROR "GLFW not found. Install it or set ABSTRACTO_FETCH_DEPS=ON.")
 endif()
 
 if(TARGET glm::glm)
-  set(RENDERCUBED_GLM_TARGET glm::glm)
+  set(ABSTRACTO_GLM_TARGET glm::glm)
 elseif(TARGET glm)
-  set(RENDERCUBED_GLM_TARGET glm)
+  set(ABSTRACTO_GLM_TARGET glm)
 else()
-  message(FATAL_ERROR "GLM not found. Install it or set RENDERCUBED_FETCH_DEPS=ON.")
+  message(FATAL_ERROR "GLM not found. Install it or set ABSTRACTO_FETCH_DEPS=ON.")
 endif()
 
-add_executable(RenderCubed src/main.cpp)
+add_executable(Abstracto src/main.cpp)
 
 target_compile_definitions(
-  RenderCubed
+  Abstracto
   PRIVATE
     VULKAN_HPP_NO_CONSTRUCTORS
 )
 
-set(RENDERCUBED_SHADER_DIR ${CMAKE_SOURCE_DIR}/assets/shaders)
-set(RENDERCUBED_SLANG_SOURCES
-  ${RENDERCUBED_SHADER_DIR}/test_pass.slang
-  ${RENDERCUBED_SHADER_DIR}/solid_transform_pass.slang
-  ${RENDERCUBED_SHADER_DIR}/texture_pass.slang
-  ${RENDERCUBED_SHADER_DIR}/debug_present_pass.slang
+set(ABSTRACTO_SHADER_DIR ${CMAKE_SOURCE_DIR}/assets/shaders)
+set(ABSTRACTO_SLANG_SOURCES
+  ${ABSTRACTO_SHADER_DIR}/test_pass.slang
+  ${ABSTRACTO_SHADER_DIR}/solid_transform_pass.slang
+  ${ABSTRACTO_SHADER_DIR}/texture_pass.slang
+  ${ABSTRACTO_SHADER_DIR}/debug_present_pass.slang
 )
 
-find_program(RENDERCUBED_SLANGC_EXECUTABLE NAMES slangc)
-set(RENDERCUBED_SLANG_OUTPUTS)
-foreach(RENDERCUBED_SLANG_SOURCE IN LISTS RENDERCUBED_SLANG_SOURCES)
-  if(EXISTS ${RENDERCUBED_SLANG_SOURCE})
-    get_filename_component(RENDERCUBED_SLANG_NAME
-                           ${RENDERCUBED_SLANG_SOURCE} NAME_WE)
-    set(RENDERCUBED_SLANG_OUTPUT
-        ${RENDERCUBED_SHADER_DIR}/${RENDERCUBED_SLANG_NAME}.spv)
-    list(APPEND RENDERCUBED_SLANG_OUTPUTS ${RENDERCUBED_SLANG_OUTPUT})
+find_program(ABSTRACTO_SLANGC_EXECUTABLE NAMES slangc)
+set(ABSTRACTO_SLANG_OUTPUTS)
+foreach(ABSTRACTO_SLANG_SOURCE IN LISTS ABSTRACTO_SLANG_SOURCES)
+  if(EXISTS ${ABSTRACTO_SLANG_SOURCE})
+    get_filename_component(ABSTRACTO_SLANG_NAME
+                           ${ABSTRACTO_SLANG_SOURCE} NAME_WE)
+    set(ABSTRACTO_SLANG_OUTPUT
+        ${ABSTRACTO_SHADER_DIR}/${ABSTRACTO_SLANG_NAME}.spv)
+    list(APPEND ABSTRACTO_SLANG_OUTPUTS ${ABSTRACTO_SLANG_OUTPUT})
 
-    if(RENDERCUBED_SLANGC_EXECUTABLE)
+    if(ABSTRACTO_SLANGC_EXECUTABLE)
       add_custom_command(
-        OUTPUT ${RENDERCUBED_SLANG_OUTPUT}
-        COMMAND ${RENDERCUBED_SLANGC_EXECUTABLE}
-                ${RENDERCUBED_SLANG_SOURCE}
+        OUTPUT ${ABSTRACTO_SLANG_OUTPUT}
+        COMMAND ${ABSTRACTO_SLANGC_EXECUTABLE}
+                ${ABSTRACTO_SLANG_SOURCE}
                 -target spirv
                 -profile glsl_450
                 -emit-spirv-directly
-                -o ${RENDERCUBED_SLANG_OUTPUT}
-        DEPENDS ${RENDERCUBED_SLANG_SOURCE}
-        COMMENT "Compiling Slang shader to SPIR-V: ${RENDERCUBED_SLANG_OUTPUT}"
+                -o ${ABSTRACTO_SLANG_OUTPUT}
+        DEPENDS ${ABSTRACTO_SLANG_SOURCE}
+        COMMENT "Compiling Slang shader to SPIR-V: ${ABSTRACTO_SLANG_OUTPUT}"
         VERBATIM
       )
     endif()
   endif()
 endforeach()
 
-if(RENDERCUBED_SLANGC_EXECUTABLE AND RENDERCUBED_SLANG_OUTPUTS)
-  add_custom_target(rendercubed_shaders DEPENDS ${RENDERCUBED_SLANG_OUTPUTS})
-  add_dependencies(RenderCubed rendercubed_shaders)
+if(ABSTRACTO_SLANGC_EXECUTABLE AND ABSTRACTO_SLANG_OUTPUTS)
+  add_custom_target(abstracto_shaders DEPENDS ${ABSTRACTO_SLANG_OUTPUTS})
+  add_dependencies(Abstracto abstracto_shaders)
 else()
   message(WARNING "slangc not found (or no Slang sources were found). Install slangc to auto-generate assets/shaders/*.spv.")
 endif()
 
 target_link_libraries(
-  RenderCubed
+  Abstracto
   PRIVATE
     Vulkan::Vulkan
-    ${RENDERCUBED_GLFW_TARGET}
-    ${RENDERCUBED_GLM_TARGET}
+    ${ABSTRACTO_GLFW_TARGET}
+    ${ABSTRACTO_GLM_TARGET}
 )
 
 target_include_directories(
-  RenderCubed
+  Abstracto
   PRIVATE
     ${CMAKE_SOURCE_DIR}/include
 )
 
 if(DEFINED stb_SOURCE_DIR)
-  target_include_directories(RenderCubed PRIVATE ${stb_SOURCE_DIR})
+  target_include_directories(Abstracto PRIVATE ${stb_SOURCE_DIR})
 else()
   find_path(STB_INCLUDE_DIR stb_image.h)
   if(NOT STB_INCLUDE_DIR)
-    message(FATAL_ERROR "stb_image.h not found. Install stb or set RENDERCUBED_FETCH_DEPS=ON.")
+    message(FATAL_ERROR "stb_image.h not found. Install stb or set ABSTRACTO_FETCH_DEPS=ON.")
   endif()
-  target_include_directories(RenderCubed PRIVATE ${STB_INCLUDE_DIR})
+  target_include_directories(Abstracto PRIVATE ${STB_INCLUDE_DIR})
 endif()
 
 if(DEFINED tinyobjloader_SOURCE_DIR)
-  target_include_directories(RenderCubed PRIVATE ${tinyobjloader_SOURCE_DIR})
+  target_include_directories(Abstracto PRIVATE ${tinyobjloader_SOURCE_DIR})
 else()
   find_path(TINYOBJLOADER_INCLUDE_DIR tiny_obj_loader.h)
   if(NOT TINYOBJLOADER_INCLUDE_DIR)
-    message(FATAL_ERROR "tiny_obj_loader.h not found. Install tinyobjloader or set RENDERCUBED_FETCH_DEPS=ON.")
+    message(FATAL_ERROR "tiny_obj_loader.h not found. Install tinyobjloader or set ABSTRACTO_FETCH_DEPS=ON.")
   endif()
-  target_include_directories(RenderCubed PRIVATE ${TINYOBJLOADER_INCLUDE_DIR})
+  target_include_directories(Abstracto PRIVATE ${TINYOBJLOADER_INCLUDE_DIR})
 endif()
