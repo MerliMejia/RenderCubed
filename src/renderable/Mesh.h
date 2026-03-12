@@ -4,7 +4,9 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <filesystem>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
@@ -57,6 +59,25 @@ template <> struct std::hash<Vertex> {
             1) ^
            (hash<glm::vec2>()(vertex.texCoord) << 1);
   }
+};
+
+struct ObjMaterialData {
+  tinyobj::material_t raw{};
+  std::string resolvedDiffuseTexturePath;
+
+  glm::vec4 diffuseRgba() const {
+    return {raw.diffuse[0], raw.diffuse[1], raw.diffuse[2], raw.dissolve};
+  }
+
+  bool hasDiffuseTexture() const { return !resolvedDiffuseTexturePath.empty(); }
+};
+
+struct ObjSubmesh {
+  std::string name;
+  uint32_t indexOffset = 0;
+  uint32_t indexCount = 0;
+  int materialIndex = -1;
+  uint32_t shapeIndex = 0;
 };
 
 class Mesh {
@@ -132,6 +153,10 @@ public:
   vk::raii::Buffer &getIndexBuffer() { return indexBuffer; }
   std::vector<uint32_t> &getIndices() { return indices; }
   const std::vector<uint32_t> &getIndices() const { return indices; }
+  const std::vector<ObjMaterialData> &getMaterials() const {
+    return objMaterials;
+  }
+  const std::vector<ObjSubmesh> &getSubmeshes() const { return objSubmeshes; }
   size_t vertexCount() const { return vertexCountValue; }
   size_t vertexStride() const { return vertexStrideValue; }
 
@@ -154,13 +179,23 @@ protected:
   void clearGeometry() {
     vertexBytes.clear();
     indices.clear();
+    objMaterials.clear();
+    objSubmeshes.clear();
     vertexStrideValue = 0;
     vertexCountValue = 0;
+  }
+
+  void setObjMetadata(std::vector<ObjSubmesh> submeshes,
+                      std::vector<ObjMaterialData> materials) {
+    objSubmeshes = std::move(submeshes);
+    objMaterials = std::move(materials);
   }
 
 private:
   std::vector<std::byte> vertexBytes;
   std::vector<uint32_t> indices;
+  std::vector<ObjMaterialData> objMaterials;
+  std::vector<ObjSubmesh> objSubmeshes;
   size_t vertexStrideValue = 0;
   size_t vertexCountValue = 0;
   vk::raii::Buffer vertexBuffer = nullptr;
@@ -198,6 +233,48 @@ struct ObjData {
   std::vector<tinyobj::shape_t> shapes;
   std::vector<tinyobj::material_t> materials;
 };
+
+inline std::string resolveObjAssetPath(const std::filesystem::path &objPath,
+                                       const std::string &assetPath) {
+  if (assetPath.empty()) {
+    return {};
+  }
+
+  const std::filesystem::path path(assetPath);
+  if (path.is_absolute()) {
+    return path.lexically_normal().string();
+  }
+
+  return (objPath.parent_path() / path).lexically_normal().string();
+}
+
+inline std::vector<ObjMaterialData>
+buildObjMaterials(const ObjData &objData,
+                  const std::filesystem::path &objPath) {
+  std::vector<ObjMaterialData> materials;
+  materials.reserve(objData.materials.size());
+
+  for (const auto &material : objData.materials) {
+    materials.push_back(ObjMaterialData{
+        .raw = material,
+        .resolvedDiffuseTexturePath =
+            resolveObjAssetPath(objPath, material.diffuse_texname),
+    });
+  }
+
+  return materials;
+}
+
+inline std::string buildSubmeshName(const tinyobj::shape_t &shape,
+                                    size_t shapeIndex, size_t partIndex) {
+  const std::string baseName =
+      shape.name.empty() ? "shape_" + std::to_string(shapeIndex) : shape.name;
+  if (partIndex == 0) {
+    return baseName;
+  }
+
+  return baseName + "_part_" + std::to_string(partIndex);
+}
 
 class ObjVertexRef {
 public:
@@ -253,56 +330,132 @@ private:
 inline ObjData loadObjData(const std::string &path) {
   ObjData data;
   std::string warn, err;
+  std::filesystem::path objPath(path);
+  std::string basePath = objPath.parent_path().string();
+  if (!basePath.empty() && basePath.back() != '/' && basePath.back() != '\\') {
+    basePath.push_back(std::filesystem::path::preferred_separator);
+  }
 
   if (!LoadObj(&data.attrib, &data.shapes, &data.materials, &warn, &err,
-               path.c_str())) {
+               path.c_str(), basePath.empty() ? nullptr : basePath.c_str())) {
     throw std::runtime_error(warn + err);
   }
 
   return data;
 }
 
+template <typename TVertex> struct BuiltObjMeshData {
+  std::vector<TVertex> vertices;
+  std::vector<uint32_t> indices;
+  std::vector<ObjSubmesh> submeshes;
+  std::vector<ObjMaterialData> materials;
+};
+
 template <typename TVertex, typename TVertexFactory>
-TypedMesh<TVertex> buildMeshFromObj(const ObjData &objData,
-                                    TVertexFactory &&vertexFactory) {
-  std::vector<TVertex> meshVertices;
-  std::vector<uint32_t> meshIndices;
+BuiltObjMeshData<TVertex> buildMeshFromObj(const ObjData &objData,
+                                           const std::filesystem::path &objPath,
+                                           TVertexFactory &&vertexFactory) {
+  BuiltObjMeshData<TVertex> meshData;
+  meshData.materials = buildObjMaterials(objData, objPath);
   std::unordered_map<TVertex, uint32_t> uniqueVertices;
 
-  for (const auto &shape : objData.shapes) {
-    for (const auto &index : shape.mesh.indices) {
-      ObjVertexRef objVertex(objData.attrib, index);
-      TVertex vertex = vertexFactory(objVertex);
-      auto [it, inserted] = uniqueVertices.try_emplace(
-          vertex, static_cast<uint32_t>(meshVertices.size()));
-      if (inserted) {
-        meshVertices.push_back(vertex);
+  for (size_t shapeIndex = 0; shapeIndex < objData.shapes.size();
+       ++shapeIndex) {
+    const auto &shape = objData.shapes[shapeIndex];
+
+    if (shape.mesh.num_face_vertices.empty()) {
+      ObjSubmesh submesh{.name = buildSubmeshName(shape, shapeIndex, 0),
+                         .indexOffset =
+                             static_cast<uint32_t>(meshData.indices.size()),
+                         .indexCount = 0,
+                         .materialIndex = shape.mesh.material_ids.empty()
+                                              ? -1
+                                              : shape.mesh.material_ids.front(),
+                         .shapeIndex = static_cast<uint32_t>(shapeIndex)};
+
+      for (const auto &index : shape.mesh.indices) {
+        ObjVertexRef objVertex(objData.attrib, index);
+        TVertex vertex = vertexFactory(objVertex);
+        auto [it, inserted] = uniqueVertices.try_emplace(
+            vertex, static_cast<uint32_t>(meshData.vertices.size()));
+        if (inserted) {
+          meshData.vertices.push_back(vertex);
+        }
+        meshData.indices.push_back(it->second);
+        submesh.indexCount++;
       }
-      meshIndices.push_back(it->second);
+
+      if (submesh.indexCount > 0) {
+        meshData.submeshes.push_back(std::move(submesh));
+      }
+      continue;
+    }
+
+    size_t runningIndex = 0;
+    size_t partIndex = 0;
+    ObjSubmesh *currentSubmesh = nullptr;
+
+    for (size_t faceIndex = 0; faceIndex < shape.mesh.num_face_vertices.size();
+         ++faceIndex) {
+      const uint32_t faceVertexCount = shape.mesh.num_face_vertices[faceIndex];
+      const int materialIndex = faceIndex < shape.mesh.material_ids.size()
+                                    ? shape.mesh.material_ids[faceIndex]
+                                    : -1;
+
+      if (currentSubmesh == nullptr ||
+          currentSubmesh->materialIndex != materialIndex) {
+        meshData.submeshes.push_back(ObjSubmesh{
+            .name = buildSubmeshName(shape, shapeIndex, partIndex++),
+            .indexOffset = static_cast<uint32_t>(meshData.indices.size()),
+            .indexCount = 0,
+            .materialIndex = materialIndex,
+            .shapeIndex = static_cast<uint32_t>(shapeIndex),
+        });
+        currentSubmesh = &meshData.submeshes.back();
+      }
+
+      for (uint32_t vertexIndex = 0; vertexIndex < faceVertexCount;
+           ++vertexIndex) {
+        const auto &index = shape.mesh.indices[runningIndex++];
+        ObjVertexRef objVertex(objData.attrib, index);
+        TVertex vertex = vertexFactory(objVertex);
+        auto [it, inserted] = uniqueVertices.try_emplace(
+            vertex, static_cast<uint32_t>(meshData.vertices.size()));
+        if (inserted) {
+          meshData.vertices.push_back(vertex);
+        }
+        meshData.indices.push_back(it->second);
+        currentSubmesh->indexCount++;
+      }
     }
   }
 
-  TypedMesh<TVertex> mesh;
-  mesh.setGeometry(std::move(meshVertices), std::move(meshIndices));
-  return mesh;
+  if (meshData.submeshes.empty() && !meshData.indices.empty()) {
+    meshData.submeshes.push_back(
+        ObjSubmesh{.name = "mesh",
+                   .indexOffset = 0,
+                   .indexCount = static_cast<uint32_t>(meshData.indices.size()),
+                   .materialIndex = -1,
+                   .shapeIndex = 0});
+  }
+
+  return meshData;
 }
 
 class ObjMesh : public TypedMesh<Vertex> {
 public:
   void loadModel(const std::string &path) {
     auto objData = loadObjData(path);
-    auto mesh =
-        buildMeshFromObj<Vertex>(objData, [](const ObjVertexRef &vertex) {
-          return Vertex{
-              .pos = vertex.position(),
-              .color = {1.0f, 1.0f, 1.0f},
-              .texCoord = vertex.texCoord(),
-          };
-        });
-    setGeometry(
-        std::vector<Vertex>(mesh.vertexData().begin(), mesh.vertexData().end()),
-        std::vector<uint32_t>(mesh.getIndices().begin(),
-                              mesh.getIndices().end()));
+    auto mesh = buildMeshFromObj<Vertex>(objData, std::filesystem::path(path),
+                                         [](const ObjVertexRef &vertex) {
+                                           return Vertex{
+                                               .pos = vertex.position(),
+                                               .color = {1.0f, 1.0f, 1.0f},
+                                               .texCoord = vertex.texCoord(),
+                                           };
+                                         });
+    setGeometry(std::move(mesh.vertices), std::move(mesh.indices));
+    setObjMetadata(std::move(mesh.submeshes), std::move(mesh.materials));
   }
 };
 
@@ -355,10 +508,10 @@ struct FullscreenVertex {
   static std::array<vk::VertexInputAttributeDescription, 2>
   getAttributeDescriptions() {
     return {
-        vk::VertexInputAttributeDescription(
-            0, 0, vk::Format::eR32G32B32Sfloat, offsetof(FullscreenVertex, pos)),
-        vk::VertexInputAttributeDescription(
-            1, 0, vk::Format::eR32G32Sfloat, offsetof(FullscreenVertex, uv)),
+        vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat,
+                                            offsetof(FullscreenVertex, pos)),
+        vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32Sfloat,
+                                            offsetof(FullscreenVertex, uv)),
     };
   }
 };
@@ -367,8 +520,8 @@ class ObjGeometryMesh : public TypedMesh<GeometryVertex> {
 public:
   void loadModel(const std::string &path) {
     auto objData = loadObjData(path);
-    auto mesh =
-        buildMeshFromObj<GeometryVertex>(objData, [](const ObjVertexRef &v) {
+    auto mesh = buildMeshFromObj<GeometryVertex>(
+        objData, std::filesystem::path(path), [](const ObjVertexRef &v) {
           glm::vec3 n = v.normal();
           if (glm::length(n) < 0.0001f) {
             n = {0.0f, 0.0f, 1.0f};
@@ -380,10 +533,8 @@ public:
               .pos = v.position(), .normal = n, .texCoord = v.texCoord()};
         });
 
-    setGeometry(std::vector<GeometryVertex>(mesh.vertexData().begin(),
-                                            mesh.vertexData().end()),
-                std::vector<uint32_t>(mesh.getIndices().begin(),
-                                      mesh.getIndices().end()));
+    setGeometry(std::move(mesh.vertices), std::move(mesh.indices));
+    setObjMetadata(std::move(mesh.submeshes), std::move(mesh.materials));
   }
 };
 

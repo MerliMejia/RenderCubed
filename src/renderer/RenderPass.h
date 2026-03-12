@@ -18,6 +18,8 @@ struct RenderItem {
   Mesh *mesh = nullptr;
   DescriptorBindings *descriptorBindings = nullptr;
   const RenderPass *targetPass = nullptr;
+  uint32_t indexOffset = 0;
+  uint32_t indexCount = 0;
 };
 
 struct RenderPassContext {

@@ -2,6 +2,7 @@
 
 #include "../renderer/FullscreenRenderPass.h"
 #include "GeometryPass.h"
+#include "LightPass.h"
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
@@ -13,7 +14,8 @@ struct DebugPassPushConstant {
 class DebugPass : public FullscreenRenderPass {
 public:
   DebugPass(PipelineSpec spec, uint32_t framesInFlight,
-            const GeometryPass *sourcePass = nullptr)
+            const GeometryPass *sourcePass = nullptr,
+            const LightPass *lightPass = nullptr)
       : FullscreenRenderPass(std::move(spec), framesInFlight,
                              RasterPassAttachmentConfig{
                                  .useColorAttachment = true,
@@ -22,11 +24,13 @@ public:
                                  .resolveToSwapchain = false,
                                  .useSwapchainColorAttachment = true,
                              }),
-        sourcePassRef(sourcePass) {}
+        sourcePassRef(sourcePass), lightPassRef(lightPass) {}
 
   void setSourcePass(const GeometryPass &sourcePass) {
     sourcePassRef = &sourcePass;
   }
+
+  void setLightPass(const LightPass &lightPass) { lightPassRef = &lightPass; }
 
   void setSelectedOutput(uint32_t index) { selectedOutput = index; }
 
@@ -37,6 +41,7 @@ protected:
         {.binding = 1},
         {.binding = 2},
         {.binding = 3},
+        {.binding = 4},
     };
   }
 
@@ -70,6 +75,7 @@ protected:
         {.binding = 2,
          .resource = sourcePassRef->sampledColorOutput(2, sampler)},
         {.binding = 3, .resource = sourcePassRef->sampledDepthOutput(sampler)},
+        {.binding = 4, .resource = lightPassRef->sampledColorOutput(sampler)},
     };
   }
 
@@ -83,11 +89,15 @@ protected:
 
 private:
   const GeometryPass *sourcePassRef = nullptr;
+  const LightPass *lightPassRef = nullptr;
   uint32_t selectedOutput = 0;
 
   void validateSourcePass() const {
     if (sourcePassRef == nullptr) {
       throw std::runtime_error("DebugPass requires a GeometryPass source");
+    }
+    if (lightPassRef == nullptr) {
+      throw std::runtime_error("DebugPass requires a LightPass source");
     }
   }
 };

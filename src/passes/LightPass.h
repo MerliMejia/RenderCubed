@@ -21,7 +21,8 @@ public:
                                  .useDepthAttachment = false,
                                  .useMsaaColorAttachment = false,
                                  .resolveToSwapchain = false,
-                                 .useSwapchainColorAttachment = true,
+                                 .useSwapchainColorAttachment = false,
+                                 .sampleColorAttachment = true,
                              }),
         sourcePassRef(sourcePass) {}
 
@@ -29,7 +30,9 @@ public:
     sourcePassRef = &sourcePass;
   }
 
-  void setProjection(const glm::mat4 &proj) { pushData.invProj = glm::inverse(proj); }
+  void setProjection(const glm::mat4 &proj) {
+    pushData.invProj = glm::inverse(proj);
+  }
 
   void setDirectionalLight(const glm::vec3 &directionViewSpace,
                            const glm::vec3 &color) {

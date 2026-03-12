@@ -22,6 +22,7 @@ float LinearizeDepth(float depth, float nearPlane, float farPlane) {
 [[vk::binding(1, 0)]] Sampler2D gbufferNormal;
 [[vk::binding(2, 0)]] Sampler2D gbufferMaterial;
 [[vk::binding(3, 0)]] Sampler2D gbufferDepth;
+[[vk::binding(4, 0)]] Sampler2D lightPassColor;
 
 [[vk::push_constant]]
 ConstantBuffer<DebugPushConstant> debugPush;
@@ -48,8 +49,12 @@ float4 fragMain(VSOutput input) : SV_TARGET {
         return gbufferMaterial.Sample(input.uv);
     }
 
-    float depth = gbufferDepth.Sample(input.uv).r;
-    float linearDepth = LinearizeDepth(depth, 0.1, 10.0);
-    float normalized = saturate(linearDepth / 10.0);
-    return float4(normalized.xxx, 1.0);
+    if (debugPush.selectedOutput == 3) {
+        float depth = gbufferDepth.Sample(input.uv).r;
+        float linearDepth = LinearizeDepth(depth, 0.1, 10.0);
+        float normalized = saturate(linearDepth / 10.0);
+        return float4(normalized.xxx, 1.0);
+    }
+
+    return lightPassColor.Sample(input.uv);
 }

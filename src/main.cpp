@@ -1,18 +1,18 @@
 #include "backend/AppWindow.h"
 #include "backend/BackendConfig.h"
 #include "backend/VulkanBackend.h"
+#include "passes/DebugPass.h"
 #include "passes/GeometryPass.h"
 #include "passes/LightPass.h"
-#include "renderable/DescriptorBindings.h"
 #include "renderable/FrameUniforms.h"
-#include "renderable/Mesh.h"
+#include "renderable/RenderableModel.h"
 #include "renderable/Sampler.h"
-#include "renderable/Texture.h"
 #include "renderer/PassRenderer.h"
 #include "renderer/PipelineSpec.h"
 #include "renderer/RenderPass.h"
 #include "vulkan/vulkan.hpp"
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -23,6 +23,14 @@ constexpr uint32_t HEIGHT = 600;
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 constexpr bool DEBUG_SHOW_SOLID_TRANSFORM_PASS = false;
 const std::string ASSET_PATH = "assets";
+
+enum class PresentedOutput : uint32_t {
+  Albedo = 0,
+  Normal = 1,
+  Material = 2,
+  Depth = 3,
+  Light = 4,
+};
 
 class DoublePassApp {
 public:
@@ -46,29 +54,24 @@ private:
   PassRenderer renderer;
   std::vector<RenderItem> renderItems;
 
-  ObjGeometryMesh mesh;
+  RenderableModel sceneModel;
   FullscreenMesh lightQuad;
   FrameUniforms frameUniforms;
-  Texture albedoTexture;
   Sampler sampler;
-  DescriptorBindings geometryBindings;
   LightPass *lightPass = nullptr;
+  DebugPass *debugPass = nullptr;
   std::chrono::steady_clock::time_point lastFrameTime =
       std::chrono::steady_clock::now();
   float lightAzimuthRadians = glm::radians(225.0f);
   float lightElevationRadians = glm::radians(-35.264f);
   float lightIntensity = 1.0f;
+  PresentedOutput presentedOutput = PresentedOutput::Light;
 
   void initWindow() { window.create(WIDTH, HEIGHT, "Double Pass"); }
+
   void initVulkan() {
     backend.initialize(window, config);
 
-    mesh.loadModel(ASSET_PATH + "/models/viking_room.obj");
-    mesh.createVertexBuffer(commandContext(), deviceContext());
-    mesh.createIndexBuffer(commandContext(), deviceContext());
-
-    albedoTexture.create(ASSET_PATH + "/textures/viking_room.png",
-                         commandContext(), deviceContext());
     sampler.create(deviceContext());
 
     lightQuad = buildFullscreenQuadMesh();
@@ -90,19 +93,30 @@ private:
     lightPass = lightPassLocal.get();
     renderer.addPass(std::move(lightPassLocal));
 
+    auto debugPassLocal = std::make_unique<DebugPass>(
+        PipelineSpec{.shaderPath = ASSET_PATH + "/shaders/debug_gbuffer_pass.spv",
+                     .enableDepthTest = false,
+                     .enableDepthWrite = false},
+        MAX_FRAMES_IN_FLIGHT, geometryPassPtr, lightPass);
+    debugPass = debugPassLocal.get();
+    debugPass->setSelectedOutput(static_cast<uint32_t>(presentedOutput));
+    renderer.addPass(std::move(debugPassLocal));
+
     renderer.initialize(deviceContext(), swapchainContext());
 
     frameUniforms.create(deviceContext(), MAX_FRAMES_IN_FLIGHT);
-    geometryBindings.create(deviceContext(), renderer.descriptorSetLayout(),
-                            frameUniforms, albedoTexture, sampler,
-                            MAX_FRAMES_IN_FLIGHT);
+    sceneModel.loadFromObj(ASSET_PATH + "/models/plant_on_table.obj",
+                           commandContext(), deviceContext(),
+                           renderer.descriptorSetLayout(), frameUniforms,
+                           sampler, MAX_FRAMES_IN_FLIGHT);
 
-    renderItems = {RenderItem{.mesh = &mesh,
-                              .descriptorBindings = &geometryBindings,
-                              .targetPass = geometryPassPtr},
-                   RenderItem{.mesh = &lightQuad,
-                              .descriptorBindings = nullptr,
-                              .targetPass = lightPass}};
+    renderItems = sceneModel.buildRenderItems(geometryPassPtr);
+    renderItems.push_back(RenderItem{.mesh = &lightQuad,
+                                     .descriptorBindings = nullptr,
+                                     .targetPass = lightPass});
+    renderItems.push_back(RenderItem{.mesh = &lightQuad,
+                                     .descriptorBindings = nullptr,
+                                     .targetPass = debugPass});
   }
 
   glm::vec3 currentLightDirectionWorld() const {
@@ -146,6 +160,28 @@ private:
     lightIntensity = glm::clamp(lightIntensity, 0.0f, 5.0f);
   }
 
+  void processDebugControls() {
+    if (glfwGetKey(window.handle(), GLFW_KEY_1) == GLFW_PRESS) {
+      presentedOutput = PresentedOutput::Material;
+    }
+    if (glfwGetKey(window.handle(), GLFW_KEY_2) == GLFW_PRESS) {
+      presentedOutput = PresentedOutput::Albedo;
+    }
+    if (glfwGetKey(window.handle(), GLFW_KEY_3) == GLFW_PRESS) {
+      presentedOutput = PresentedOutput::Depth;
+    }
+    if (glfwGetKey(window.handle(), GLFW_KEY_4) == GLFW_PRESS) {
+      presentedOutput = PresentedOutput::Normal;
+    }
+    if (glfwGetKey(window.handle(), GLFW_KEY_5) == GLFW_PRESS) {
+      presentedOutput = PresentedOutput::Light;
+    }
+
+    if (debugPass != nullptr) {
+      debugPass->setSelectedOutput(static_cast<uint32_t>(presentedOutput));
+    }
+  }
+
   void drawFrame() {
     auto frameState = backend.beginFrame(window);
 
@@ -161,6 +197,7 @@ private:
     lastFrameTime = now;
 
     processLightControls(deltaSeconds);
+    processDebugControls();
 
     UniformBufferObject ubo{};
 

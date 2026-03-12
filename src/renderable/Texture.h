@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -14,8 +15,8 @@ import vulkan_hpp;
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-#include "./RenderUtils.h"
 #include "../renderer/SampledImageResource.h"
+#include "./RenderUtils.h"
 
 class Texture {
 public:
@@ -24,51 +25,20 @@ public:
     int texWidth, texHeight, texChannels;
     stbi_uc *pixels = stbi_load(path.c_str(), &texWidth, &texHeight,
                                 &texChannels, STBI_rgb_alpha);
-    vk::DeviceSize imageSize = texWidth * texHeight * 4;
-    mipLevels = static_cast<uint32_t>(
-                    std::floor(std::log2(std::max(texWidth, texHeight)))) +
-                1;
 
     if (!pixels) {
       throw std::runtime_error("failed to load texture image!");
     }
 
-    vk::raii::Buffer stagingBuffer({});
-    vk::raii::DeviceMemory stagingBufferMemory({});
-    RenderUtils::createBuffer(deviceContext, imageSize,
-                              vk::BufferUsageFlagBits::eTransferSrc,
-                              vk::MemoryPropertyFlagBits::eHostVisible |
-                                  vk::MemoryPropertyFlagBits::eHostCoherent,
-                              stagingBuffer, stagingBufferMemory);
-
-    void *data = stagingBufferMemory.mapMemory(0, imageSize);
-    memcpy(data, pixels, imageSize);
-    stagingBufferMemory.unmapMemory();
-
+    createFromPixels(pixels, texWidth, texHeight, commandContext,
+                     deviceContext);
     stbi_image_free(pixels);
+  }
 
-    RenderUtils::createImage(deviceContext, texWidth, texHeight, mipLevels,
-                             vk::SampleCountFlagBits::e1,
-                             vk::Format::eR8G8B8A8Srgb,
-                             vk::ImageTiling::eOptimal,
-                             vk::ImageUsageFlagBits::eTransferSrc |
-                                 vk::ImageUsageFlagBits::eTransferDst |
-                                 vk::ImageUsageFlagBits::eSampled,
-                             vk::MemoryPropertyFlagBits::eDeviceLocal,
-                             textureImage, textureImageMemory);
-
-    RenderUtils::transitionImageLayout(
-        commandContext, deviceContext, textureImage,
-        vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
-        mipLevels);
-    RenderUtils::copyBufferToImage(stagingBuffer, textureImage,
-                                   static_cast<uint32_t>(texWidth),
-                                   static_cast<uint32_t>(texHeight),
-                                   commandContext, deviceContext);
-
-    generateMipmaps(textureImage, vk::Format::eR8G8B8A8Srgb, texWidth, texHeight,
-                    mipLevels, commandContext, deviceContext);
-    createTextureImageView(deviceContext);
+  void createSolidColor(const std::array<uint8_t, 4> &rgba,
+                        CommandContext &commandContext,
+                        DeviceContext &deviceContext) {
+    createFromPixels(rgba.data(), 1, 1, commandContext, deviceContext);
   }
 
   vk::raii::ImageView &imageView() { return textureImageView; }
@@ -86,9 +56,52 @@ public:
   }
 
 private:
+  void createFromPixels(const stbi_uc *pixels, int texWidth, int texHeight,
+                        CommandContext &commandContext,
+                        DeviceContext &deviceContext) {
+    vk::DeviceSize imageSize =
+        static_cast<vk::DeviceSize>(texWidth) * texHeight * 4;
+    mipLevels = static_cast<uint32_t>(
+                    std::floor(std::log2(std::max(texWidth, texHeight)))) +
+                1;
+
+    vk::raii::Buffer stagingBuffer({});
+    vk::raii::DeviceMemory stagingBufferMemory({});
+    RenderUtils::createBuffer(deviceContext, imageSize,
+                              vk::BufferUsageFlagBits::eTransferSrc,
+                              vk::MemoryPropertyFlagBits::eHostVisible |
+                                  vk::MemoryPropertyFlagBits::eHostCoherent,
+                              stagingBuffer, stagingBufferMemory);
+
+    void *data = stagingBufferMemory.mapMemory(0, imageSize);
+    memcpy(data, pixels, imageSize);
+    stagingBufferMemory.unmapMemory();
+
+    RenderUtils::createImage(deviceContext, texWidth, texHeight, mipLevels,
+                             vk::SampleCountFlagBits::e1,
+                             vk::Format::eR8G8B8A8Srgb,
+                             vk::ImageTiling::eOptimal,
+                             vk::ImageUsageFlagBits::eTransferSrc |
+                                 vk::ImageUsageFlagBits::eTransferDst |
+                                 vk::ImageUsageFlagBits::eSampled,
+                             vk::MemoryPropertyFlagBits::eDeviceLocal,
+                             textureImage, textureImageMemory);
+
+    RenderUtils::transitionImageLayout(
+        commandContext, deviceContext, textureImage,
+        vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+        mipLevels);
+    RenderUtils::copyBufferToImage(
+        stagingBuffer, textureImage, static_cast<uint32_t>(texWidth),
+        static_cast<uint32_t>(texHeight), commandContext, deviceContext);
+
+    generateMipmaps(textureImage, vk::Format::eR8G8B8A8Srgb, texWidth,
+                    texHeight, mipLevels, commandContext, deviceContext);
+    createTextureImageView(deviceContext);
+  }
   void generateMipmaps(vk::raii::Image &image, vk::Format imageFormat,
-                       int32_t texWidth, int32_t texHeight,
-                       uint32_t mipLevels, CommandContext &commandContext,
+                       int32_t texWidth, int32_t texHeight, uint32_t mipLevels,
+                       CommandContext &commandContext,
                        DeviceContext &deviceContext) {
     vk::FormatProperties formatProperties =
         deviceContext.physicalDeviceHandle().getFormatProperties(imageFormat);

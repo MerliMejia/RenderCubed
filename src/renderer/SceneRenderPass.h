@@ -4,11 +4,11 @@
 
 class SceneRenderPass : public RasterRenderPass {
 public:
-  explicit SceneRenderPass(
-      PipelineSpec pipelineSpec,
-      RasterPassAttachmentConfig attachmentConfig = RasterPassAttachmentConfig())
-      : RasterRenderPass(std::move(pipelineSpec),
-                         std::move(attachmentConfig)) {}
+  explicit SceneRenderPass(PipelineSpec pipelineSpec,
+                           RasterPassAttachmentConfig attachmentConfig =
+                               RasterPassAttachmentConfig())
+      : RasterRenderPass(std::move(pipelineSpec), std::move(attachmentConfig)) {
+  }
 
 protected:
   virtual bool shouldDrawRenderItem(const RenderItem &renderItem) const {
@@ -28,12 +28,16 @@ protected:
 
   virtual void drawRenderItem(const RenderPassContext &context,
                               const RenderItem &renderItem) {
+    const uint32_t indexCount =
+        renderItem.indexCount == 0
+            ? static_cast<uint32_t>(renderItem.mesh->getIndices().size())
+            : renderItem.indexCount;
     context.commandBuffer.bindVertexBuffers(
         0, *renderItem.mesh->getVertexBuffer(), {0});
     context.commandBuffer.bindIndexBuffer(*renderItem.mesh->getIndexBuffer(), 0,
                                           vk::IndexType::eUint32);
-    context.commandBuffer.drawIndexed(renderItem.mesh->getIndices().size(), 1,
-                                      0, 0, 0);
+    context.commandBuffer.drawIndexed(indexCount, 1, renderItem.indexOffset, 0,
+                                      0);
   }
 
 private:
