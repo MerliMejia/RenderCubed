@@ -61,32 +61,45 @@ template <> struct std::hash<Vertex> {
 };
 
 struct ModelMaterialData {
+  struct TextureSource {
+    std::string resolvedPath;
+    std::vector<uint8_t> rgba;
+    int width = 0;
+    int height = 0;
+
+    bool hasPath() const { return !resolvedPath.empty(); }
+    bool hasEmbeddedRgba() const {
+      return !rgba.empty() && width > 0 && height > 0;
+    }
+  };
+
   std::string name;
   glm::vec4 baseColorFactor = {1.0f, 1.0f, 1.0f, 1.0f};
-  std::string resolvedBaseColorTexturePath;
-  std::vector<uint8_t> baseColorTextureRgba;
-  int baseColorTextureWidth = 0;
-  int baseColorTextureHeight = 0;
+  TextureSource baseColorTexture;
+  TextureSource metallicRoughnessTexture;
+  TextureSource normalTexture;
+  TextureSource emissiveTexture;
+  TextureSource occlusionTexture;
   float metallicFactor = 0.0f;
   float roughnessFactor = 1.0f;
   glm::vec3 emissiveFactor = {0.0f, 0.0f, 0.0f};
+  float normalScale = 1.0f;
+  float occlusionStrength = 1.0f;
   tinyobj::material_t raw{};
   bool hasObjMaterial = false;
 
   glm::vec4 baseColorRgba() const { return baseColorFactor; }
 
   bool hasBaseColorTexture() const {
-    return !resolvedBaseColorTexturePath.empty() ||
-           hasEmbeddedBaseColorTexture();
+    return baseColorTexture.hasPath() || hasEmbeddedBaseColorTexture();
   }
 
   bool hasEmbeddedBaseColorTexture() const {
-    return !baseColorTextureRgba.empty() && baseColorTextureWidth > 0 &&
-           baseColorTextureHeight > 0;
+    return baseColorTexture.hasEmbeddedRgba();
   }
 
   bool hasBaseColorTexturePath() const {
-    return !resolvedBaseColorTexturePath.empty();
+    return baseColorTexture.hasPath();
   }
 
   glm::vec4 diffuseRgba() const { return baseColorRgba(); }
@@ -181,6 +194,7 @@ public:
   const std::vector<ModelMaterialData> &getMaterials() const {
     return materials;
   }
+  std::vector<ModelMaterialData> &mutableMaterials() { return materials; }
   const std::vector<ModelSubmesh> &getSubmeshes() const { return submeshes; }
   size_t vertexCount() const { return vertexCountValue; }
   size_t vertexStride() const { return vertexStrideValue; }
@@ -284,8 +298,9 @@ buildObjMaterials(const ObjData &objData,
         .name = material.name,
         .baseColorFactor = {material.diffuse[0], material.diffuse[1],
                             material.diffuse[2], material.dissolve},
-        .resolvedBaseColorTexturePath =
-            resolveObjAssetPath(objPath, material.diffuse_texname),
+        .baseColorTexture =
+            {.resolvedPath =
+                 resolveObjAssetPath(objPath, material.diffuse_texname)},
         .metallicFactor = 0.0f,
         .roughnessFactor = 1.0f,
         .emissiveFactor = {material.emission[0], material.emission[1],
@@ -498,12 +513,13 @@ struct GeometryVertex {
   glm::vec3 pos;
   glm::vec3 normal;
   glm::vec2 texCoord;
+  glm::vec4 tangent = {1.0f, 0.0f, 0.0f, 1.0f};
 
   static vk::VertexInputBindingDescription getBindingDescription() {
     return {0, sizeof(GeometryVertex), vk::VertexInputRate::eVertex};
   }
 
-  static std::array<vk::VertexInputAttributeDescription, 3>
+  static std::array<vk::VertexInputAttributeDescription, 4>
   getAttributeDescriptions() {
     return {
         vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat,
@@ -512,7 +528,9 @@ struct GeometryVertex {
                                             offsetof(GeometryVertex, normal)),
         vk::VertexInputAttributeDescription(
             2, 0, vk::Format::eR32G32Sfloat,
-            offsetof(GeometryVertex, texCoord))};
+            offsetof(GeometryVertex, texCoord)),
+        vk::VertexInputAttributeDescription(3, 0, vk::Format::eR32G32B32A32Sfloat,
+                                            offsetof(GeometryVertex, tangent))};
   }
 
   bool operator==(const GeometryVertex &other) const {
@@ -536,8 +554,77 @@ public:
                            std::vector<uint32_t> meshIndices,
                            std::vector<ModelSubmesh> meshSubmeshes,
                            std::vector<ModelMaterialData> meshMaterials) {
+    computeTangents(meshVertices, meshIndices);
     setGeometry(std::move(meshVertices), std::move(meshIndices));
     setModelMetadata(std::move(meshSubmeshes), std::move(meshMaterials));
+  }
+
+private:
+  static void computeTangents(std::vector<GeometryVertex> &vertices,
+                              const std::vector<uint32_t> &indices) {
+    if (vertices.empty() || indices.size() < 3) {
+      return;
+    }
+
+    std::vector<glm::vec3> tangentAccum(vertices.size(), glm::vec3(0.0f));
+    std::vector<glm::vec3> bitangentAccum(vertices.size(), glm::vec3(0.0f));
+
+    for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+      const uint32_t i0 = indices[i + 0];
+      const uint32_t i1 = indices[i + 1];
+      const uint32_t i2 = indices[i + 2];
+      if (i0 >= vertices.size() || i1 >= vertices.size() ||
+          i2 >= vertices.size()) {
+        continue;
+      }
+
+      const auto &v0 = vertices[i0];
+      const auto &v1 = vertices[i1];
+      const auto &v2 = vertices[i2];
+
+      const glm::vec3 edge1 = v1.pos - v0.pos;
+      const glm::vec3 edge2 = v2.pos - v0.pos;
+      const glm::vec2 deltaUv1 = v1.texCoord - v0.texCoord;
+      const glm::vec2 deltaUv2 = v2.texCoord - v0.texCoord;
+
+      const float det =
+          deltaUv1.x * deltaUv2.y - deltaUv1.y * deltaUv2.x;
+      if (std::abs(det) < 1e-6f) {
+        continue;
+      }
+
+      const float invDet = 1.0f / det;
+      const glm::vec3 tangent =
+          (edge1 * deltaUv2.y - edge2 * deltaUv1.y) * invDet;
+      const glm::vec3 bitangent =
+          (edge2 * deltaUv1.x - edge1 * deltaUv2.x) * invDet;
+
+      tangentAccum[i0] += tangent;
+      tangentAccum[i1] += tangent;
+      tangentAccum[i2] += tangent;
+      bitangentAccum[i0] += bitangent;
+      bitangentAccum[i1] += bitangent;
+      bitangentAccum[i2] += bitangent;
+    }
+
+    for (size_t vertexIndex = 0; vertexIndex < vertices.size(); ++vertexIndex) {
+      const glm::vec3 normal = glm::normalize(vertices[vertexIndex].normal);
+      glm::vec3 tangent = tangentAccum[vertexIndex];
+
+      if (glm::dot(tangent, tangent) < 1e-6f) {
+        tangent = std::abs(normal.z) < 0.999f
+                      ? glm::normalize(glm::cross(normal, glm::vec3(0.0f, 0.0f, 1.0f)))
+                      : glm::normalize(glm::cross(normal, glm::vec3(0.0f, 1.0f, 0.0f)));
+        vertices[vertexIndex].tangent = glm::vec4(tangent, 1.0f);
+        continue;
+      }
+
+      tangent = glm::normalize(tangent - normal * glm::dot(normal, tangent));
+      const glm::vec3 bitangent = bitangentAccum[vertexIndex];
+      const float handedness =
+          glm::dot(glm::cross(normal, tangent), bitangent) < 0.0f ? -1.0f : 1.0f;
+      vertices[vertexIndex].tangent = glm::vec4(tangent, handedness);
+    }
   }
 };
 

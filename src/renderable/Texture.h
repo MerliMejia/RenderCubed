@@ -17,10 +17,16 @@ import vulkan_hpp;
 #include "../renderer/SampledImageResource.h"
 #include "./RenderUtils.h"
 
+enum class TextureEncoding {
+  Srgb,
+  Linear,
+};
+
 class Texture {
 public:
   void create(const std::string &path, CommandContext &commandContext,
-              DeviceContext &deviceContext) {
+              DeviceContext &deviceContext,
+              TextureEncoding encoding = TextureEncoding::Srgb) {
     int texWidth, texHeight, texChannels;
     stbi_uc *pixels = stbi_load(path.c_str(), &texWidth, &texHeight,
                                 &texChannels, STBI_rgb_alpha);
@@ -29,25 +35,28 @@ public:
       throw std::runtime_error("failed to load texture image!");
     }
 
-    createFromPixels(pixels, texWidth, texHeight, commandContext,
+    createFromPixels(pixels, texWidth, texHeight, encoding, commandContext,
                      deviceContext);
     stbi_image_free(pixels);
   }
 
   void createSolidColor(const std::array<uint8_t, 4> &rgba,
                         CommandContext &commandContext,
-                        DeviceContext &deviceContext) {
-    createFromPixels(rgba.data(), 1, 1, commandContext, deviceContext);
+                        DeviceContext &deviceContext,
+                        TextureEncoding encoding = TextureEncoding::Srgb) {
+    createFromPixels(rgba.data(), 1, 1, encoding, commandContext, deviceContext);
   }
 
   void createRgba(const uint8_t *rgbaPixels, int width, int height,
                   CommandContext &commandContext,
-                  DeviceContext &deviceContext) {
+                  DeviceContext &deviceContext,
+                  TextureEncoding encoding = TextureEncoding::Srgb) {
     if (rgbaPixels == nullptr || width <= 0 || height <= 0) {
       throw std::runtime_error("invalid RGBA texture data");
     }
 
-    createFromPixels(rgbaPixels, width, height, commandContext, deviceContext);
+    createFromPixels(rgbaPixels, width, height, encoding, commandContext,
+                     deviceContext);
   }
 
   vk::raii::ImageView &imageView() { return textureImageView; }
@@ -66,6 +75,7 @@ public:
 
 private:
   void createFromPixels(const stbi_uc *pixels, int texWidth, int texHeight,
+                        TextureEncoding encoding,
                         CommandContext &commandContext,
                         DeviceContext &deviceContext) {
     vk::DeviceSize imageSize =
@@ -73,6 +83,10 @@ private:
     mipLevels = static_cast<uint32_t>(
                     std::floor(std::log2(std::max(texWidth, texHeight)))) +
                 1;
+
+    textureFormat = encoding == TextureEncoding::Srgb
+                        ? vk::Format::eR8G8B8A8Srgb
+                        : vk::Format::eR8G8B8A8Unorm;
 
     vk::raii::Buffer stagingBuffer({});
     vk::raii::DeviceMemory stagingBufferMemory({});
@@ -88,7 +102,7 @@ private:
 
     RenderUtils::createImage(deviceContext, texWidth, texHeight, mipLevels,
                              vk::SampleCountFlagBits::e1,
-                             vk::Format::eR8G8B8A8Srgb,
+                             textureFormat,
                              vk::ImageTiling::eOptimal,
                              vk::ImageUsageFlagBits::eTransferSrc |
                                  vk::ImageUsageFlagBits::eTransferDst |
@@ -104,8 +118,8 @@ private:
         stagingBuffer, textureImage, static_cast<uint32_t>(texWidth),
         static_cast<uint32_t>(texHeight), commandContext, deviceContext);
 
-    generateMipmaps(textureImage, vk::Format::eR8G8B8A8Srgb, texWidth,
-                    texHeight, mipLevels, commandContext, deviceContext);
+    generateMipmaps(textureImage, textureFormat, texWidth, texHeight, mipLevels,
+                    commandContext, deviceContext);
     createTextureImageView(deviceContext);
   }
   void generateMipmaps(vk::raii::Image &image, vk::Format imageFormat,
@@ -203,7 +217,7 @@ private:
     vk::ImageViewCreateInfo viewInfo{
         .image = textureImage,
         .viewType = vk::ImageViewType::e2D,
-        .format = vk::Format::eR8G8B8A8Srgb,
+        .format = textureFormat,
         .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, mipLevels, 0,
                              1}};
     textureImageView =
@@ -214,4 +228,5 @@ private:
   vk::raii::DeviceMemory textureImageMemory = nullptr;
   vk::raii::ImageView textureImageView = nullptr;
   uint32_t mipLevels = 0;
+  vk::Format textureFormat = vk::Format::eR8G8B8A8Srgb;
 };

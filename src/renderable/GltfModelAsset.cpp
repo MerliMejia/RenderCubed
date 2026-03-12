@@ -147,6 +147,36 @@ std::vector<uint8_t> imageToRgba8(const tinygltf::Image &image) {
   return rgba;
 }
 
+ModelMaterialData::TextureSource
+extractTextureSource(const tinygltf::Model &model,
+                     const std::filesystem::path &gltfPath, int textureIndex) {
+  ModelMaterialData::TextureSource source;
+
+  if (textureIndex < 0 ||
+      static_cast<size_t>(textureIndex) >= model.textures.size()) {
+    return source;
+  }
+
+  const auto &texture = model.textures[static_cast<size_t>(textureIndex)];
+  if (texture.source < 0 ||
+      static_cast<size_t>(texture.source) >= model.images.size()) {
+    return source;
+  }
+
+  const auto &image = model.images[static_cast<size_t>(texture.source)];
+  if (!image.uri.empty() && !isDataUri(image.uri)) {
+    source.resolvedPath = resolveGltfAssetPath(gltfPath, image.uri);
+  }
+
+  if (source.resolvedPath.empty()) {
+    source.rgba = imageToRgba8(image);
+    source.width = image.width;
+    source.height = image.height;
+  }
+
+  return source;
+}
+
 std::vector<ModelMaterialData>
 buildGltfMaterials(const tinygltf::Model &model,
                    const std::filesystem::path &gltfPath) {
@@ -170,6 +200,9 @@ buildGltfMaterials(const tinygltf::Model &model,
         static_cast<float>(material.pbrMetallicRoughness.metallicFactor);
     materialData.roughnessFactor =
         static_cast<float>(material.pbrMetallicRoughness.roughnessFactor);
+    materialData.normalScale = static_cast<float>(material.normalTexture.scale);
+    materialData.occlusionStrength =
+        static_cast<float>(material.occlusionTexture.strength);
 
     if (material.emissiveFactor.size() == 3) {
       materialData.emissiveFactor = {
@@ -179,27 +212,17 @@ buildGltfMaterials(const tinygltf::Model &model,
       };
     }
 
-    const int textureIndex =
-        material.pbrMetallicRoughness.baseColorTexture.index;
-    if (textureIndex >= 0 &&
-        static_cast<size_t>(textureIndex) < model.textures.size()) {
-      const auto &texture = model.textures[textureIndex];
-      if (texture.source >= 0 &&
-          static_cast<size_t>(texture.source) < model.images.size()) {
-        const auto &image = model.images[texture.source];
-
-        if (!image.uri.empty() && !isDataUri(image.uri)) {
-          materialData.resolvedBaseColorTexturePath =
-              resolveGltfAssetPath(gltfPath, image.uri);
-        }
-
-        if (materialData.resolvedBaseColorTexturePath.empty()) {
-          materialData.baseColorTextureRgba = imageToRgba8(image);
-          materialData.baseColorTextureWidth = image.width;
-          materialData.baseColorTextureHeight = image.height;
-        }
-      }
-    }
+    materialData.baseColorTexture = extractTextureSource(
+        model, gltfPath, material.pbrMetallicRoughness.baseColorTexture.index);
+    materialData.metallicRoughnessTexture = extractTextureSource(
+        model, gltfPath,
+        material.pbrMetallicRoughness.metallicRoughnessTexture.index);
+    materialData.normalTexture =
+        extractTextureSource(model, gltfPath, material.normalTexture.index);
+    materialData.emissiveTexture =
+        extractTextureSource(model, gltfPath, material.emissiveTexture.index);
+    materialData.occlusionTexture =
+        extractTextureSource(model, gltfPath, material.occlusionTexture.index);
 
     materials.push_back(std::move(materialData));
   }

@@ -24,6 +24,9 @@ public:
                                       .sampled = true},
                                      {.name = "gbuffer2_material",
                                       .format = RasterAttachmentFormat::RGBA8,
+                                      .sampled = true},
+                                     {.name = "gbuffer3_emissive",
+                                      .format = RasterAttachmentFormat::RGBA16F,
                                       .sampled = true}},
                 .sampleDepthAttachment = true}) {}
 
@@ -33,7 +36,15 @@ protected:
              .descriptorType = vk::DescriptorType::eUniformBuffer,
              .descriptorCount = 1,
              .stageFlags = vk::ShaderStageFlagBits::eVertex},
-            sampledImageBindingSpec(1, vk::ShaderStageFlagBits::eFragment)};
+            sampledImageBindingSpec(1, vk::ShaderStageFlagBits::eFragment),
+            sampledImageBindingSpec(2, vk::ShaderStageFlagBits::eFragment),
+            sampledImageBindingSpec(3, vk::ShaderStageFlagBits::eFragment),
+            sampledImageBindingSpec(4, vk::ShaderStageFlagBits::eFragment),
+            sampledImageBindingSpec(5, vk::ShaderStageFlagBits::eFragment),
+            {.binding = 6,
+             .descriptorType = vk::DescriptorType::eUniformBuffer,
+             .descriptorCount = 1,
+             .stageFlags = vk::ShaderStageFlagBits::eFragment}};
   }
   VertexInputLayoutSpec vertexInputLayout() const override {
     auto attrs = GeometryVertex::getAttributeDescriptions();

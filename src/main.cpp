@@ -3,7 +3,7 @@
 #include "backend/VulkanBackend.h"
 #include "passes/DebugPass.h"
 #include "passes/GeometryPass.h"
-#include "passes/LightPass.h"
+#include "passes/PbrPass.h"
 #include "renderable/FrameUniforms.h"
 #include "renderable/RenderableModel.h"
 #include "renderable/Sampler.h"
@@ -11,6 +11,8 @@
 #include "renderer/PipelineSpec.h"
 #include "renderer/RenderPass.h"
 #include "vulkan/vulkan.hpp"
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -31,6 +33,50 @@ enum class PresentedOutput : uint32_t {
   Depth = 3,
   Light = 4,
 };
+
+std::string normalizedMaterialName(std::string_view name) {
+  std::string normalized;
+  normalized.reserve(name.size());
+
+  for (char c : name) {
+    normalized.push_back(
+        static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+  }
+
+  return normalized;
+}
+
+void applyToyCarMaterialTweaks(std::vector<ModelMaterialData> &materials) {
+  for (auto &material : materials) {
+    const std::string name = normalizedMaterialName(material.name);
+
+    if (name == "toycar") {
+      material.roughnessFactor *= 0.55f;
+      material.occlusionStrength *= 0.65f;
+      material.normalScale *= 0.8f;
+      continue;
+    }
+
+    if (name == "fabric") {
+      material.baseColorFactor *= glm::vec4(2.35f, 2.0f, 2.0f, 1.0f);
+      material.roughnessFactor =
+          glm::clamp(material.roughnessFactor, 0.85f, 1.0f);
+      material.occlusionStrength *= 0.35f;
+      material.normalScale *= 0.7f;
+      material.emissiveFactor += glm::vec3(0.06f, 0.0f, 0.0f);
+      continue;
+    }
+
+    if (name == "glass") {
+      material.baseColorFactor = {0.85f, 0.95f, 1.0f, 1.0f};
+      material.metallicFactor = 0.0f;
+      material.roughnessFactor = 0.02f;
+      material.normalScale = 0.0f;
+      material.occlusionStrength = 0.0f;
+      material.emissiveFactor = {0.08f, 0.1f, 0.12f};
+    }
+  }
+}
 
 class DoublePassApp {
 public:
@@ -58,7 +104,7 @@ private:
   FullscreenMesh lightQuad;
   FrameUniforms frameUniforms;
   Sampler sampler;
-  LightPass *lightPass = nullptr;
+  PbrPass *pbrPass = nullptr;
   DebugPass *debugPass = nullptr;
   std::chrono::steady_clock::time_point lastFrameTime =
       std::chrono::steady_clock::now();
@@ -85,20 +131,20 @@ private:
     auto *geometryPassPtr = geometryPass.get();
     renderer.addPass(std::move(geometryPass));
 
-    auto lightPassLocal = std::make_unique<LightPass>(
-        PipelineSpec{.shaderPath = ASSET_PATH + "/shaders/light_pass.spv",
+    auto pbrPassLocal = std::make_unique<PbrPass>(
+        PipelineSpec{.shaderPath = ASSET_PATH + "/shaders/pbr_pass.spv",
                      .enableDepthTest = false,
                      .enableDepthWrite = false},
         MAX_FRAMES_IN_FLIGHT, geometryPassPtr);
-    lightPass = lightPassLocal.get();
-    renderer.addPass(std::move(lightPassLocal));
+    pbrPass = pbrPassLocal.get();
+    renderer.addPass(std::move(pbrPassLocal));
 
     auto debugPassLocal = std::make_unique<DebugPass>(
         PipelineSpec{.shaderPath =
                          ASSET_PATH + "/shaders/debug_gbuffer_pass.spv",
                      .enableDepthTest = false,
                      .enableDepthWrite = false},
-        MAX_FRAMES_IN_FLIGHT, geometryPassPtr, lightPass);
+        MAX_FRAMES_IN_FLIGHT, geometryPassPtr, pbrPass);
     debugPass = debugPassLocal.get();
     debugPass->setSelectedOutput(static_cast<uint32_t>(presentedOutput));
     renderer.addPass(std::move(debugPassLocal));
@@ -106,15 +152,15 @@ private:
     renderer.initialize(deviceContext(), swapchainContext());
 
     frameUniforms.create(deviceContext(), MAX_FRAMES_IN_FLIGHT);
-    sceneModel.loadFromFile(ASSET_PATH + "/models/toy_car.glb",
-                            commandContext(), deviceContext(),
-                            renderer.descriptorSetLayout(), frameUniforms,
-                            sampler, MAX_FRAMES_IN_FLIGHT);
+    sceneModel.loadFromFile(
+        ASSET_PATH + "/models/toy_car.glb", commandContext(), deviceContext(),
+        renderer.descriptorSetLayout(), frameUniforms, sampler,
+        MAX_FRAMES_IN_FLIGHT, applyToyCarMaterialTweaks);
 
     renderItems = sceneModel.buildRenderItems(geometryPassPtr);
     renderItems.push_back(RenderItem{.mesh = &lightQuad,
                                      .descriptorBindings = nullptr,
-                                     .targetPass = lightPass});
+                                     .targetPass = pbrPass});
     renderItems.push_back(RenderItem{.mesh = &lightQuad,
                                      .descriptorBindings = nullptr,
                                      .targetPass = debugPass});
@@ -223,13 +269,13 @@ private:
 
     frameUniforms.write(frameState->frameIndex, ubo);
 
-    if (lightPass != nullptr) {
+    if (pbrPass != nullptr) {
       glm::vec3 lightDirectionWorld = currentLightDirectionWorld();
       glm::vec3 lightDirectionView =
           glm::normalize(glm::mat3(ubo.view) * lightDirectionWorld);
 
-      lightPass->setProjection(ubo.proj);
-      lightPass->setDirectionalLight(
+      pbrPass->setProjection(ubo.proj);
+      pbrPass->setDirectionalLight(
           lightDirectionView, glm::vec3(1.0f, 0.95f, 0.9f) * lightIntensity);
     }
 

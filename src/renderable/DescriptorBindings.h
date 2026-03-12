@@ -1,9 +1,11 @@
 #pragma once
 
 #include "FrameUniforms.h"
+#include "RenderUtils.h"
 #include "Sampler.h"
 #include "Texture.h"
 #include <array>
+#include <cstring>
 #include <vector>
 
 #if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
@@ -12,17 +14,28 @@
 import vulkan_hpp;
 #endif
 
+struct MaterialUniformData {
+  alignas(16) glm::vec4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
+  alignas(16) glm::vec4 emissiveFactor{0.0f, 0.0f, 0.0f, 1.0f};
+  alignas(16) glm::vec4 surfaceParams{0.0f, 1.0f, 1.0f, 1.0f};
+};
+
 class DescriptorBindings {
 public:
   void create(DeviceContext &deviceContext,
               const vk::raii::DescriptorSetLayout &descriptorSetLayout,
-              FrameUniforms &frameUniforms, Texture &texture, Sampler &sampler,
+              FrameUniforms &frameUniforms, Texture &baseColorTexture,
+              Texture &metallicRoughnessTexture, Texture &normalTexture,
+              Texture &emissiveTexture, Texture &occlusionTexture,
+              Sampler &sampler, const MaterialUniformData &materialUniform,
               uint32_t framesInFlight) {
+    createMaterialBuffer(deviceContext, materialUniform);
+
     std::array poolSize{
         vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer,
-                               framesInFlight),
+                               framesInFlight * 2),
         vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler,
-                               framesInFlight)};
+                               framesInFlight * 5)};
     vk::DescriptorPoolCreateInfo poolInfo{
         .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
         .maxSets = framesInFlight,
@@ -46,9 +59,29 @@ public:
       vk::DescriptorBufferInfo bufferInfo{.buffer = frameUniforms.buffer(i),
                                           .offset = 0,
                                           .range = sizeof(UniformBufferObject)};
-      vk::DescriptorImageInfo imageInfo{
+      vk::DescriptorBufferInfo materialBufferInfo{
+          .buffer = materialBuffer,
+          .offset = 0,
+          .range = sizeof(MaterialUniformData)};
+      vk::DescriptorImageInfo baseColorImageInfo{
           .sampler = sampler.handle(),
-          .imageView = texture.imageView(),
+          .imageView = baseColorTexture.imageView(),
+          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+      vk::DescriptorImageInfo metallicRoughnessImageInfo{
+          .sampler = sampler.handle(),
+          .imageView = metallicRoughnessTexture.imageView(),
+          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+      vk::DescriptorImageInfo normalImageInfo{
+          .sampler = sampler.handle(),
+          .imageView = normalTexture.imageView(),
+          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+      vk::DescriptorImageInfo emissiveImageInfo{
+          .sampler = sampler.handle(),
+          .imageView = emissiveTexture.imageView(),
+          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+      vk::DescriptorImageInfo occlusionImageInfo{
+          .sampler = sampler.handle(),
+          .imageView = occlusionTexture.imageView(),
           .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
       std::array descriptorWrites{
           vk::WriteDescriptorSet{.dstSet = descriptorSets[i],
@@ -64,7 +97,42 @@ public:
                                  .descriptorCount = 1,
                                  .descriptorType =
                                      vk::DescriptorType::eCombinedImageSampler,
-                                 .pImageInfo = &imageInfo}};
+                                 .pImageInfo = &baseColorImageInfo},
+          vk::WriteDescriptorSet{.dstSet = descriptorSets[i],
+                                 .dstBinding = 2,
+                                 .dstArrayElement = 0,
+                                 .descriptorCount = 1,
+                                 .descriptorType =
+                                     vk::DescriptorType::eCombinedImageSampler,
+                                 .pImageInfo = &metallicRoughnessImageInfo},
+          vk::WriteDescriptorSet{.dstSet = descriptorSets[i],
+                                 .dstBinding = 3,
+                                 .dstArrayElement = 0,
+                                 .descriptorCount = 1,
+                                 .descriptorType =
+                                     vk::DescriptorType::eCombinedImageSampler,
+                                 .pImageInfo = &normalImageInfo},
+          vk::WriteDescriptorSet{.dstSet = descriptorSets[i],
+                                 .dstBinding = 4,
+                                 .dstArrayElement = 0,
+                                 .descriptorCount = 1,
+                                 .descriptorType =
+                                     vk::DescriptorType::eCombinedImageSampler,
+                                 .pImageInfo = &emissiveImageInfo},
+          vk::WriteDescriptorSet{.dstSet = descriptorSets[i],
+                                 .dstBinding = 5,
+                                 .dstArrayElement = 0,
+                                 .descriptorCount = 1,
+                                 .descriptorType =
+                                     vk::DescriptorType::eCombinedImageSampler,
+                                 .pImageInfo = &occlusionImageInfo},
+          vk::WriteDescriptorSet{.dstSet = descriptorSets[i],
+                                 .dstBinding = 6,
+                                 .dstArrayElement = 0,
+                                 .descriptorCount = 1,
+                                 .descriptorType =
+                                     vk::DescriptorType::eUniformBuffer,
+                                 .pBufferInfo = &materialBufferInfo}};
       deviceContext.deviceHandle().updateDescriptorSets(descriptorWrites, {});
     }
   }
@@ -74,6 +142,21 @@ public:
   }
 
 private:
+  void createMaterialBuffer(DeviceContext &deviceContext,
+                            const MaterialUniformData &materialUniform) {
+    RenderUtils::createBuffer(deviceContext, sizeof(MaterialUniformData),
+                              vk::BufferUsageFlagBits::eUniformBuffer,
+                              vk::MemoryPropertyFlagBits::eHostVisible |
+                                  vk::MemoryPropertyFlagBits::eHostCoherent,
+                              materialBuffer, materialBufferMemory);
+
+    void *mapped = materialBufferMemory.mapMemory(0, sizeof(MaterialUniformData));
+    std::memcpy(mapped, &materialUniform, sizeof(MaterialUniformData));
+    materialBufferMemory.unmapMemory();
+  }
+
+  vk::raii::Buffer materialBuffer = nullptr;
+  vk::raii::DeviceMemory materialBufferMemory = nullptr;
   vk::raii::DescriptorPool descriptorPool = nullptr;
   std::vector<vk::raii::DescriptorSet> descriptorSets;
 };

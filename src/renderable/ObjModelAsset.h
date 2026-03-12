@@ -23,6 +23,10 @@ public:
     return geometryMesh.getMaterials();
   }
 
+  std::vector<ModelMaterialData> &mutableMaterials() override {
+    return geometryMesh.mutableMaterials();
+  }
+
   const std::vector<ModelSubmesh> &submeshes() const override {
     return geometryMesh.getSubmeshes();
   }

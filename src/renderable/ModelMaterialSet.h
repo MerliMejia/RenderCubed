@@ -43,7 +43,11 @@ public:
 
 private:
   struct MaterialResource {
-    Texture texture;
+    Texture baseColorTexture;
+    Texture metallicRoughnessTexture;
+    Texture normalTexture;
+    Texture emissiveTexture;
+    Texture occlusionTexture;
     DescriptorBindings bindings;
   };
 
@@ -56,9 +60,31 @@ private:
     return {toByte(color.r), toByte(color.g), toByte(color.b), toByte(color.a)};
   }
 
-  static bool hasAvailableBaseColorTexture(const ModelMaterialData &material) {
-    return material.hasBaseColorTexturePath() &&
-           std::filesystem::exists(material.resolvedBaseColorTexturePath);
+  static bool hasAvailableTexture(
+      const ModelMaterialData::TextureSource &textureSource) {
+    return textureSource.hasPath() &&
+           std::filesystem::exists(textureSource.resolvedPath);
+  }
+
+  static void createTextureFromSource(
+      Texture &texture, const ModelMaterialData::TextureSource &textureSource,
+      const std::array<uint8_t, 4> &fallbackColor, TextureEncoding encoding,
+      CommandContext &commandContext, DeviceContext &deviceContext) {
+    if (hasAvailableTexture(textureSource)) {
+      texture.create(textureSource.resolvedPath, commandContext, deviceContext,
+                     encoding);
+      return;
+    }
+
+    if (textureSource.hasEmbeddedRgba()) {
+      texture.createRgba(textureSource.rgba.data(), textureSource.width,
+                         textureSource.height, commandContext, deviceContext,
+                         encoding);
+      return;
+    }
+
+    texture.createSolidColor(fallbackColor, commandContext, deviceContext,
+                             encoding);
   }
 
   void initializeResource(
@@ -66,24 +92,44 @@ private:
       DeviceContext &deviceContext, CommandContext &commandContext,
       const vk::raii::DescriptorSetLayout &descriptorSetLayout,
       FrameUniforms &frameUniforms, Sampler &sampler, uint32_t framesInFlight) {
-    const glm::vec4 fallbackColor =
-        material == nullptr ? glm::vec4(1.0f) : material->baseColorRgba();
+    const ModelMaterialData defaultMaterial{};
+    const ModelMaterialData &resolvedMaterial =
+        material == nullptr ? defaultMaterial : *material;
 
-    if (material != nullptr && hasAvailableBaseColorTexture(*material)) {
-      resource.texture.create(material->resolvedBaseColorTexturePath,
-                              commandContext, deviceContext);
-    } else if (material != nullptr && material->hasEmbeddedBaseColorTexture()) {
-      resource.texture.createRgba(material->baseColorTextureRgba.data(),
-                                  material->baseColorTextureWidth,
-                                  material->baseColorTextureHeight,
-                                  commandContext, deviceContext);
-    } else {
-      resource.texture.createSolidColor(toRgba8(fallbackColor), commandContext,
-                                        deviceContext);
-    }
+    createTextureFromSource(resource.baseColorTexture,
+                            resolvedMaterial.baseColorTexture,
+                            {255, 255, 255, 255}, TextureEncoding::Srgb,
+                            commandContext, deviceContext);
+    createTextureFromSource(resource.metallicRoughnessTexture,
+                            resolvedMaterial.metallicRoughnessTexture,
+                            {255, 255, 255, 255}, TextureEncoding::Linear,
+                            commandContext, deviceContext);
+    createTextureFromSource(resource.normalTexture,
+                            resolvedMaterial.normalTexture,
+                            {128, 128, 255, 255}, TextureEncoding::Linear,
+                            commandContext, deviceContext);
+    createTextureFromSource(resource.emissiveTexture,
+                            resolvedMaterial.emissiveTexture,
+                            {255, 255, 255, 255}, TextureEncoding::Srgb,
+                            commandContext, deviceContext);
+    createTextureFromSource(resource.occlusionTexture,
+                            resolvedMaterial.occlusionTexture,
+                            {255, 255, 255, 255}, TextureEncoding::Linear,
+                            commandContext, deviceContext);
 
-    resource.bindings.create(deviceContext, descriptorSetLayout, frameUniforms,
-                             resource.texture, sampler, framesInFlight);
+    MaterialUniformData materialUniform{
+        .baseColorFactor = resolvedMaterial.baseColorFactor,
+        .emissiveFactor = glm::vec4(resolvedMaterial.emissiveFactor, 1.0f),
+        .surfaceParams =
+            {resolvedMaterial.metallicFactor, resolvedMaterial.roughnessFactor,
+             resolvedMaterial.normalScale, resolvedMaterial.occlusionStrength},
+    };
+
+    resource.bindings.create(
+        deviceContext, descriptorSetLayout, frameUniforms,
+        resource.baseColorTexture, resource.metallicRoughnessTexture,
+        resource.normalTexture, resource.emissiveTexture,
+        resource.occlusionTexture, sampler, materialUniform, framesInFlight);
   }
 
   MaterialResource defaultMaterialResource;

@@ -2,38 +2,44 @@
 
 #include "../renderer/FullscreenRenderPass.h"
 #include "GeometryPass.h"
-#include <cstdint>
 #include <stdexcept>
 #include <vector>
 
-struct DebugPassPushConstant {
-  uint32_t selectedOutput = 0;
+struct PbrPassPushConstant {
+  glm::mat4 invProj{1.0f};
+  glm::vec4 lightDirection{0.0f, -1.0f, 0.0f, 0.0f};
+  glm::vec4 lightColor{1.0f, 1.0f, 1.0f, 1.0f};
 };
 
-class DebugPass : public FullscreenRenderPass {
+class PbrPass : public FullscreenRenderPass {
 public:
-  DebugPass(PipelineSpec spec, uint32_t framesInFlight,
-            const GeometryPass *sourcePass = nullptr,
-            const RasterRenderPass *finalPass = nullptr)
+  PbrPass(PipelineSpec spec, uint32_t framesInFlight,
+          const GeometryPass *sourcePass = nullptr)
       : FullscreenRenderPass(std::move(spec), framesInFlight,
                              RasterPassAttachmentConfig{
                                  .useColorAttachment = true,
                                  .useDepthAttachment = false,
                                  .useMsaaColorAttachment = false,
                                  .resolveToSwapchain = false,
-                                 .useSwapchainColorAttachment = true,
+                                 .useSwapchainColorAttachment = false,
+                                 .sampleColorAttachment = true,
                              }),
-        sourcePassRef(sourcePass), finalPassRef(finalPass) {}
+        sourcePassRef(sourcePass) {}
 
   void setSourcePass(const GeometryPass &sourcePass) {
     sourcePassRef = &sourcePass;
   }
 
-  void setFinalPass(const RasterRenderPass &finalPass) {
-    finalPassRef = &finalPass;
+  void setProjection(const glm::mat4 &proj) {
+    pushData.invProj = glm::inverse(proj);
   }
 
-  void setSelectedOutput(uint32_t index) { selectedOutput = index; }
+  void setDirectionalLight(const glm::vec3 &directionViewSpace,
+                           const glm::vec3 &color) {
+    pushData.lightDirection =
+        glm::vec4(glm::normalize(directionViewSpace), 0.0f);
+    pushData.lightColor = glm::vec4(color, 1.0f);
+  }
 
 protected:
   std::vector<FullscreenImageInputBinding> imageInputBindings() const override {
@@ -51,7 +57,7 @@ protected:
         vk::PushConstantRange{
             .stageFlags = vk::ShaderStageFlagBits::eFragment,
             .offset = 0,
-            .size = sizeof(DebugPassPushConstant),
+            .size = sizeof(PbrPassPushConstant),
         },
     };
   }
@@ -75,30 +81,25 @@ protected:
          .resource = sourcePassRef->sampledColorOutput(1, sampler)},
         {.binding = 2,
          .resource = sourcePassRef->sampledColorOutput(2, sampler)},
-        {.binding = 3, .resource = sourcePassRef->sampledDepthOutput(sampler)},
-        {.binding = 4, .resource = finalPassRef->sampledColorOutput(sampler)},
+        {.binding = 3,
+         .resource = sourcePassRef->sampledColorOutput(3, sampler)},
+        {.binding = 4, .resource = sourcePassRef->sampledDepthOutput(sampler)},
     };
   }
 
   void bindAdditionalPassResources(const RenderPassContext &context) override {
-    DebugPassPushConstant push{};
-    push.selectedOutput = selectedOutput;
-
-    context.commandBuffer.pushConstants<DebugPassPushConstant>(
-        *pipelineLayoutHandle(), vk::ShaderStageFlagBits::eFragment, 0, {push});
+    context.commandBuffer.pushConstants<PbrPassPushConstant>(
+        *pipelineLayoutHandle(), vk::ShaderStageFlagBits::eFragment, 0,
+        {pushData});
   }
 
 private:
   const GeometryPass *sourcePassRef = nullptr;
-  const RasterRenderPass *finalPassRef = nullptr;
-  uint32_t selectedOutput = 0;
+  PbrPassPushConstant pushData{};
 
   void validateSourcePass() const {
     if (sourcePassRef == nullptr) {
-      throw std::runtime_error("DebugPass requires a GeometryPass source");
-    }
-    if (finalPassRef == nullptr) {
-      throw std::runtime_error("DebugPass requires a shaded source pass");
+      throw std::runtime_error("PbrPass requires a GeometryPass source");
     }
   }
 };
