@@ -29,7 +29,7 @@ constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 constexpr bool DEBUG_SHOW_SOLID_TRANSFORM_PASS = false;
 const std::string ASSET_PATH = "assets";
 
-class DoublePassApp {
+class DefaultExampleApp {
 public:
   void run() {
     initWindow();
@@ -41,7 +41,7 @@ public:
 private:
   AppWindow window;
   VulkanBackend backend;
-  BackendConfig config{.appName = "Double Pass",
+  BackendConfig config{.appName = "Default Example",
                        .maxFramesInFlight = MAX_FRAMES_IN_FLIGHT};
 
   DeviceContext &deviceContext() { return backend.device(); }
@@ -67,7 +67,7 @@ private:
   DefaultDebugUISettings debugUiSettings;
   float smoothedFrameTimeMs = 0.0f;
 
-  void initWindow() { window.create(WIDTH, HEIGHT, "Double Pass", true); }
+  void initWindow() { window.create(WIDTH, HEIGHT, "Default Example", true); }
 
   void syncProceduralSkySunWithLight() {
     const glm::vec3 sunDirection = -currentLightDirectionWorld();
@@ -342,7 +342,7 @@ private:
 
 int main() {
   try {
-    DoublePassApp app;
+    DefaultExampleApp app;
     app.run();
   } catch (std::exception &e) {
     std::cerr << e.what() << std::endl;
