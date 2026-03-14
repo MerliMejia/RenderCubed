@@ -1,5 +1,5 @@
 <div align="center">
-    <img src="assets/gallery/logo.jpg" alt="Abstracto logo" />
+    <img src="assets/gallery/logo2.jpg" alt="Abstracto logo" />
 </div>
 
 <p align="center">
@@ -34,7 +34,7 @@ The name comes from the Spanish word for "abstract." That is the point of the pr
 
 | Layer                   | What it gives you                                                                                       |
 | ----------------------- | ------------------------------------------------------------------------------------------------------- |
-| Bootstrap               | `MinimalRendererApp`, `AppWindow`, `BackendConfig`, `VulkanBackend`, `FrameState`                       |
+| Bootstrap               | `AppWindow`, `BackendConfig`, `VulkanBackend`, `FrameState`                       |
 | Backend contexts        | `InstanceContext`, `SurfaceContext`, `DeviceContext`, `SwapchainContext`, `CommandContext`, `FrameSync` |
 | Geometry and assets     | `Mesh`, `FullscreenMesh`, `RenderableModel`, `ObjModelAsset`, `GltfModelAsset`                          |
 | Materials and resources | `Texture`, `Sampler`, `DescriptorBindings`, `FrameGeometryUniforms`, `ImageBasedLighting`               |
