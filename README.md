@@ -1,5 +1,5 @@
 <div align="center">
-    <img src="assets/gallery/logo.jpg" alt="Abstracto logo" style="width:100%" />
+    <img src="assets/gallery/logo.jpg" alt="Abstracto logo" />
 </div>
 
 <p align="center">
