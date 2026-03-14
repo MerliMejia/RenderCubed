@@ -12,11 +12,16 @@ struct WindowSize {
 
 class AppWindow {
 public:
-  void create(int width, int height, const std::string &title) {
+  void create(int width, int height, const std::string &title,
+              bool maximized = false) {
     glfwInit();
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+
+    if (maximized) {
+      glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
+    }
 
     window = glfwCreateWindow(width, height, title.c_str(), nullptr, nullptr);
     glfwSetWindowUserPointer(window, this);

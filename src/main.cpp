@@ -65,8 +65,9 @@ private:
   std::chrono::steady_clock::time_point lastFrameTime =
       std::chrono::steady_clock::now();
   DefaultDebugUISettings debugUiSettings;
+  float smoothedFrameTimeMs = 0.0f;
 
-  void initWindow() { window.create(WIDTH, HEIGHT, "Double Pass"); }
+  void initWindow() { window.create(WIDTH, HEIGHT, "Double Pass", true); }
 
   void syncProceduralSkySunWithLight() {
     const glm::vec3 sunDirection = -currentLightDirectionWorld();
@@ -194,6 +195,15 @@ private:
     const float deltaSeconds = std::min(
         std::chrono::duration<float>(now - lastFrameTime).count(), 0.1f);
     lastFrameTime = now;
+    const float frameTimeMs = deltaSeconds * 1000.0f;
+    if (smoothedFrameTimeMs == 0.0f) {
+      smoothedFrameTimeMs = frameTimeMs;
+    } else {
+      smoothedFrameTimeMs =
+          smoothedFrameTimeMs + (frameTimeMs - smoothedFrameTimeMs) * 0.1f;
+    }
+    const float smoothedFps =
+        smoothedFrameTimeMs > 0.0f ? 1000.0f / smoothedFrameTimeMs : 0.0f;
 
     if (imguiPass != nullptr) {
       imguiPass->beginFrame();
@@ -205,7 +215,9 @@ private:
                   [this]() { syncProceduralSkySunWithLight(); },
               .currentLightDirectionWorld =
                   [this]() { return currentLightDirectionWorld(); },
-          });
+          },
+          DefaultDebugUIPerformanceStats{.fps = smoothedFps,
+                                         .frameTimeMs = smoothedFrameTimeMs});
       const DefaultDebugUIResult uiResult = defaultDebugUi.build();
       if (uiResult.materialChanged) {
         sceneModel.syncMaterialParameters();

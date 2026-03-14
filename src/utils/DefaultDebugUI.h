@@ -173,10 +173,16 @@ struct DefaultDebugUIResult {
   bool iblBakeRequested = false;
 };
 
+struct DefaultDebugUIPerformanceStats {
+  float fps = 0.0f;
+  float frameTimeMs = 0.0f;
+};
+
 struct DefaultDebugUIBindings {
   RenderableModel &sceneModel;
   DefaultDebugUISettings &settings;
   DefaultDebugUICallbacks callbacks;
+  DefaultDebugUIPerformanceStats performanceStats;
 };
 
 class DefaultDebugUI {
@@ -186,17 +192,21 @@ public:
 
   static DefaultDebugUI create(RenderableModel &sceneModel,
                                DefaultDebugUISettings &settings,
-                               DefaultDebugUICallbacks callbacks) {
+                               DefaultDebugUICallbacks callbacks,
+                               DefaultDebugUIPerformanceStats performanceStats =
+                                   {}) {
     return DefaultDebugUI(DefaultDebugUIBindings{
         .sceneModel = sceneModel,
         .settings = settings,
         .callbacks = std::move(callbacks),
+        .performanceStats = performanceStats,
     });
   }
 
   DefaultDebugUIResult build() {
     DefaultDebugUIResult result;
     result.materialChanged = buildMaterialEditorUi();
+    buildPerformanceUi();
     buildCameraUi();
     buildTransformUi();
     buildLightUi();
@@ -379,6 +389,15 @@ private:
     }
     ImGui::Text("Position: %.2f %.2f %.2f", settings.cameraPosition.x,
                 settings.cameraPosition.y, settings.cameraPosition.z);
+    ImGui::End();
+  }
+
+  void buildPerformanceUi() {
+    const auto &performanceStats = bindings.performanceStats;
+    ImGui::Begin("Performance");
+    ImGui::Text("FPS: %.1f", performanceStats.fps);
+    ImGui::SameLine(0.0f, 16.0f);
+    ImGui::Text("Frame Time: %.2f ms", performanceStats.frameTimeMs);
     ImGui::End();
   }
 
