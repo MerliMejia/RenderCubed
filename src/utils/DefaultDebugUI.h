@@ -4,9 +4,12 @@
 #include "../passes/TonemapPass.h"
 #include "../renderable/ImageBasedLightingTypes.h"
 #include "../renderable/RenderableModel.h"
+#include "../renderable/SceneLightSet.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <utility>
 
 #include <GLFW/glfw3.h>
@@ -28,11 +31,9 @@ struct DefaultDebugUISettings {
   PresentedOutput presentedOutput = PresentedOutput::TonemapPass;
   PbrDebugView pbrDebugView = PbrDebugView::Final;
   int selectedMaterialIndex = 0;
+  int selectedLightIndex = 0;
 
-  float lightAzimuthRadians = glm::radians(-129.316f);
-  float lightElevationRadians = glm::radians(-39.011f);
-  float lightIntensity = 13.263f;
-  glm::vec3 lightColor = {1.0f, 242.0f / 255.0f, 230.0f / 255.0f};
+  SceneLightSet sceneLights = SceneLightSet::showcaseLights();
 
   float exposure = 1.0f;
   float autoExposureKey = 2.5f;
@@ -47,14 +48,14 @@ struct DefaultDebugUISettings {
   float environmentSpecularWeight = 1.35f;
   float dielectricSpecularScale = 2.4f;
   float environmentRotationRadians = 0.0f;
-  bool iblEnabled = true;
-  bool skyboxVisible = true;
+  bool iblEnabled = false;
+  bool skyboxVisible = false;
   bool syncSkySunToLight = true;
   ImageBasedLightingBakeSettings iblBakeSettings{};
 
   glm::vec3 modelPosition = {0.0f, 0.0f, 0.0f};
-  glm::vec3 modelRotationDegrees = {90.0f, 180.0f, 0.0f};
-  glm::vec3 modelScale = {0.5f, 0.5f, 0.5f};
+  glm::vec3 modelRotationDegrees = {0.0f, 0.0f, 0.0f};
+  glm::vec3 modelScale = {1.0f, 1.0f, 1.0f};
   bool smoothGltfNormalsEnabled = false;
 
   glm::vec3 cameraPosition = {2.7f, 2.7f, 1.1f};
@@ -71,7 +72,7 @@ struct DefaultDebugUISettings {
 struct DefaultDebugUICallbacks {
   std::function<void()> reloadSceneModel;
   std::function<void()> syncProceduralSkySunWithLight;
-  std::function<glm::vec3()> currentLightDirectionWorld;
+  std::function<glm::vec3()> currentPrimaryDirectionalLightWorld;
 };
 
 class DefaultDebugCameraController {
@@ -210,7 +211,8 @@ public:
     buildPerformanceUi();
     buildCameraUi();
     buildTransformUi();
-    buildLightUi();
+    buildLightsUi();
+    buildTonemapUi();
     buildViewUi();
     buildPbrDebugUi();
     result.iblBakeRequested = buildEnvironmentUi();
@@ -219,6 +221,37 @@ public:
 
 private:
   DefaultDebugUIBindings bindings;
+
+  static const char *lightTypeLabel(SceneLightType type) {
+    switch (type) {
+    case SceneLightType::Directional:
+      return "Directional";
+    case SceneLightType::Point:
+      return "Point";
+    case SceneLightType::Spot:
+      return "Spot";
+    }
+    return "Unknown";
+  }
+
+  static glm::vec3 directionFromAngles(float azimuthRadians,
+                                       float elevationRadians) {
+    const float cosElevation = std::cos(elevationRadians);
+    return glm::normalize(glm::vec3(cosElevation * std::cos(azimuthRadians),
+                                    cosElevation * std::sin(azimuthRadians),
+                                    std::sin(elevationRadians)));
+  }
+
+  static void anglesFromDirection(const glm::vec3 &direction,
+                                  float &azimuthRadians,
+                                  float &elevationRadians) {
+    const glm::vec3 normalizedDirection = glm::normalize(
+        glm::length(direction) > 1e-6f ? direction
+                                       : glm::vec3(0.0f, -1.0f, -1.0f));
+    azimuthRadians = std::atan2(normalizedDirection.y, normalizedDirection.x);
+    elevationRadians =
+        std::asin(glm::clamp(normalizedDirection.z, -1.0f, 1.0f));
+  }
 
   bool buildMaterialEditorUi() {
     bool materialChanged = false;
@@ -295,21 +328,118 @@ private:
     return materialChanged;
   }
 
-  void buildLightUi() {
+  void buildLightsUi() {
     auto &settings = bindings.settings;
-    ImGui::Begin("Light");
-    float azimuthDegrees = glm::degrees(settings.lightAzimuthRadians);
-    float elevationDegrees = glm::degrees(settings.lightElevationRadians);
-    if (ImGui::SliderFloat("Azimuth", &azimuthDegrees, -180.0f, 180.0f)) {
-      settings.lightAzimuthRadians = glm::radians(azimuthDegrees);
+    auto &lights = settings.sceneLights.lights();
+    ImGui::Begin("Lights");
+    if (ImGui::Button("Add Directional")) {
+      settings.sceneLights.addDirectional();
+      settings.selectedLightIndex =
+          static_cast<int>(settings.sceneLights.size()) - 1;
     }
-    if (ImGui::SliderFloat("Elevation", &elevationDegrees, -89.0f, 89.0f)) {
-      settings.lightElevationRadians = glm::radians(elevationDegrees);
+    ImGui::SameLine();
+    if (ImGui::Button("Add Point")) {
+      settings.sceneLights.addPoint();
+      settings.selectedLightIndex =
+          static_cast<int>(settings.sceneLights.size()) - 1;
     }
-    ImGui::SliderFloat("Intensity", &settings.lightIntensity, 0.0f, 20.0f);
-    ImGui::ColorEdit3("Color", &settings.lightColor.x);
-    ImGui::SeparatorText("Tonemap");
+    ImGui::SameLine();
+    if (ImGui::Button("Add Spot")) {
+      settings.sceneLights.addSpot();
+      settings.selectedLightIndex =
+          static_cast<int>(settings.sceneLights.size()) - 1;
+    }
+    if (ImGui::Button("Reset Showcase Lights")) {
+      settings.sceneLights = SceneLightSet::showcaseLights();
+      settings.selectedLightIndex = 0;
+    }
 
+    if (lights.empty()) {
+      settings.selectedLightIndex = -1;
+      ImGui::TextUnformatted("No lights in the scene.");
+      ImGui::End();
+      return;
+    }
+
+    settings.selectedLightIndex = std::clamp(
+        settings.selectedLightIndex, 0, static_cast<int>(lights.size()) - 1);
+
+    ImGui::SeparatorText("Scene Lights");
+    for (int index = 0; index < static_cast<int>(lights.size()); ++index) {
+      const SceneLight &light = lights[static_cast<size_t>(index)];
+      std::string label = light.name + "##light_" + std::to_string(index);
+      if (ImGui::Selectable(label.c_str(),
+                            settings.selectedLightIndex == index)) {
+        settings.selectedLightIndex = index;
+      }
+    }
+
+    SceneLight &light =
+        lights[static_cast<size_t>(settings.selectedLightIndex)];
+    ImGui::SeparatorText("Selected Light");
+    ImGui::Text("Type: %s", lightTypeLabel(light.type));
+    ImGui::Checkbox("Enabled", &light.enabled);
+    ImGui::ColorEdit3("Color", &light.color.x);
+    ImGui::SliderFloat("Intensity", &light.intensity, 0.0f, 50.0f);
+
+    if (light.type == SceneLightType::Directional ||
+        light.type == SceneLightType::Spot) {
+      float azimuthRadians = 0.0f;
+      float elevationRadians = 0.0f;
+      anglesFromDirection(light.direction, azimuthRadians, elevationRadians);
+      float azimuthDegrees = glm::degrees(azimuthRadians);
+      float elevationDegrees = glm::degrees(elevationRadians);
+      if (ImGui::SliderFloat("Azimuth", &azimuthDegrees, -180.0f, 180.0f)) {
+        azimuthRadians = glm::radians(azimuthDegrees);
+        light.direction = directionFromAngles(azimuthRadians, elevationRadians);
+      }
+      if (ImGui::SliderFloat("Elevation", &elevationDegrees, -89.0f, 89.0f)) {
+        elevationRadians = glm::radians(elevationDegrees);
+        light.direction = directionFromAngles(azimuthRadians, elevationRadians);
+      }
+      ImGui::Text("Direction: %.2f %.2f %.2f", light.direction.x,
+                  light.direction.y, light.direction.z);
+    }
+
+    if (light.type == SceneLightType::Point ||
+        light.type == SceneLightType::Spot) {
+      ImGui::DragFloat3("Position", &light.position.x, 0.05f);
+      ImGui::SliderFloat("Range", &light.range, 0.5f, 25.0f);
+      light.range = std::max(light.range, 0.01f);
+    }
+
+    if (light.type == SceneLightType::Spot) {
+      float innerDegrees = glm::degrees(light.innerConeAngleRadians);
+      float outerDegrees = glm::degrees(light.outerConeAngleRadians);
+      if (ImGui::SliderFloat("Inner Cone", &innerDegrees, 1.0f, 85.0f)) {
+        light.innerConeAngleRadians = glm::radians(innerDegrees);
+      }
+      if (ImGui::SliderFloat("Outer Cone", &outerDegrees, 1.0f, 89.0f)) {
+        light.outerConeAngleRadians = glm::radians(outerDegrees);
+      }
+      light.outerConeAngleRadians =
+          std::max(light.outerConeAngleRadians, light.innerConeAngleRadians);
+    }
+
+    if (ImGui::Button("Remove Selected Light") && !lights.empty()) {
+      settings.sceneLights.remove(
+          static_cast<size_t>(settings.selectedLightIndex));
+      settings.selectedLightIndex = std::clamp(
+          settings.selectedLightIndex, 0,
+          std::max(static_cast<int>(settings.sceneLights.size()) - 1, 0));
+    }
+
+    const glm::vec3 primaryDirection =
+        bindings.callbacks.currentPrimaryDirectionalLightWorld();
+    ImGui::SeparatorText("Primary Directional");
+    ImGui::Text("Direction: %.2f %.2f %.2f", primaryDirection.x,
+                primaryDirection.y, primaryDirection.z);
+    ImGui::End();
+  }
+
+  void buildTonemapUi() {
+    auto &settings = bindings.settings;
+    ImGui::Begin("Tonemap");
     int tonemapOperatorIndex = static_cast<int>(settings.tonemapOperator);
     ImGui::Combo("Operator", &tonemapOperatorIndex,
                  "None\0Reinhard\0ACES\0Filmic\0");
@@ -324,11 +454,6 @@ private:
     }
     ImGui::SliderFloat("White Point", &settings.whitePoint, 0.5f, 16.0f);
     ImGui::SliderFloat("Gamma", &settings.gamma, 1.0f, 3.0f);
-
-    const glm::vec3 lightDirectionWorld =
-        bindings.callbacks.currentLightDirectionWorld();
-    ImGui::Text("Direction: %.2f %.2f %.2f", lightDirectionWorld.x,
-                lightDirectionWorld.y, lightDirectionWorld.z);
     ImGui::End();
   }
 

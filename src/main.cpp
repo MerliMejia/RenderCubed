@@ -71,7 +71,7 @@ private:
   void initWindow() { window.create(WIDTH, HEIGHT, "Default Example", true); }
 
   void syncProceduralSkySunWithLight() {
-    const glm::vec3 sunDirection = -currentLightDirectionWorld();
+    const glm::vec3 sunDirection = -currentPrimaryDirectionalLightWorld();
     debugUiSettings.iblBakeSettings.sky.sunAzimuthRadians =
         std::atan2(sunDirection.y, sunDirection.x);
     debugUiSettings.iblBakeSettings.sky.sunElevationRadians =
@@ -79,7 +79,7 @@ private:
   }
 
   std::string sceneModelPath() const {
-    return ASSET_PATH + "/models/night.glb";
+    return ASSET_PATH + "/models/material_test.glb";
   }
 
   void rebuildSceneRenderItems() {
@@ -176,12 +176,26 @@ private:
     rebuildSceneRenderItems();
   }
 
-  glm::vec3 currentLightDirectionWorld() const {
-    const float cosElevation = std::cos(debugUiSettings.lightElevationRadians);
-    return glm::normalize(
-        glm::vec3(cosElevation * std::cos(debugUiSettings.lightAzimuthRadians),
-                  cosElevation * std::sin(debugUiSettings.lightAzimuthRadians),
-                  std::sin(debugUiSettings.lightElevationRadians)));
+  glm::vec3 currentPrimaryDirectionalLightWorld() const {
+    const int directionalIndex =
+        debugUiSettings.sceneLights.firstDirectionalLightIndex();
+    if (directionalIndex < 0) {
+      return glm::normalize(glm::vec3(-0.55f, -0.25f, -1.0f));
+    }
+    return debugUiSettings.sceneLights
+        .lights()[static_cast<size_t>(directionalIndex)]
+        .direction;
+  }
+
+  glm::vec3 estimatedSceneLightRadiance() const {
+    glm::vec3 radiance(0.0f);
+    for (const auto &light : debugUiSettings.sceneLights.lights()) {
+      if (!light.enabled) {
+        continue;
+      }
+      radiance += light.color * std::max(light.intensity, 0.0f);
+    }
+    return radiance;
   }
 
   void drawFrame() {
@@ -215,8 +229,8 @@ private:
               .reloadSceneModel = [this]() { reloadSceneModel(); },
               .syncProceduralSkySunWithLight =
                   [this]() { syncProceduralSkySunWithLight(); },
-              .currentLightDirectionWorld =
-                  [this]() { return currentLightDirectionWorld(); },
+              .currentPrimaryDirectionalLightWorld =
+                  [this]() { return currentPrimaryDirectionalLightWorld(); },
           },
           DefaultDebugUIPerformanceStats{.fps = smoothedFps,
                                          .frameTimeMs = smoothedFrameTimeMs});
@@ -286,14 +300,8 @@ private:
     frameGeometryUniforms.write(frameState->frameIndex, geometryUniformData);
 
     if (pbrPass != nullptr) {
-      glm::vec3 lightDirectionWorld = currentLightDirectionWorld();
-      glm::vec3 lightDirectionView = glm::normalize(
-          glm::mat3(geometryUniformData.view) * lightDirectionWorld);
-
       pbrPass->setCamera(geometryUniformData.proj, geometryUniformData.view);
-      pbrPass->setDirectionalLight(lightDirectionView,
-                                   debugUiSettings.lightColor *
-                                       debugUiSettings.lightIntensity);
+      pbrPass->setSceneLights(debugUiSettings.sceneLights);
       pbrPass->setEnvironmentControls(
           debugUiSettings.environmentRotationRadians,
           debugUiSettings.environmentIntensity *
@@ -308,8 +316,7 @@ private:
       pbrPass->setDebugView(debugUiSettings.pbrDebugView);
     }
     if (tonemapPass != nullptr) {
-      const glm::vec3 lightRadiance =
-          debugUiSettings.lightColor * debugUiSettings.lightIntensity;
+      const glm::vec3 lightRadiance = estimatedSceneLightRadiance();
       const float lightLuminance =
           glm::dot(lightRadiance, glm::vec3(0.2126f, 0.7152f, 0.0722f));
       const float resolvedExposure =

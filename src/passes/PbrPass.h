@@ -1,9 +1,16 @@
 #pragma once
 
-#include "../renderer/FullscreenRenderPass.h"
 #include "../renderable/ImageBasedLighting.h"
+#include "../renderable/LightTypes.h"
+#include "../renderable/SceneLightSet.h"
+#include "../renderer/FullscreenRenderPass.h"
+#include "../renderer/PassUniformSet.h"
 #include "GeometryPass.h"
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
+#include <glm/gtc/matrix_transform.hpp>
 #include <stdexcept>
 #include <vector>
 
@@ -17,15 +24,25 @@ enum class PbrDebugView : uint32_t {
   Background = 6,
 };
 
-struct PbrPassPushConstant {
+constexpr uint32_t MAX_PBR_LIGHTS = 8;
+
+struct PbrLightUniformData {
+  glm::vec4 positionAndType{0.0f, 0.0f, 0.0f,
+                            static_cast<float>(SceneLightType::Directional)};
+  glm::vec4 directionAndRange{0.0f, -1.0f, 0.0f, 1.0f};
+  glm::vec4 colorAndIntensity{1.0f, 1.0f, 1.0f, 1.0f};
+  glm::vec4 spotAngles{1.0f, 0.0f, 0.0f, 0.0f};
+};
+
+struct PbrPassUniformData {
   glm::vec4 projParams{1.0f, -1.0f, -1.0f, -0.1f};
   glm::vec4 viewRightAndBackground{1.0f, 0.0f, 0.0f, 1.0f};
   glm::vec4 viewUpAndDiffuse{0.0f, 1.0f, 0.0f, 1.0f};
   glm::vec4 viewForwardAndSpecular{0.0f, 0.0f, -1.0f, 1.0f};
-  glm::vec4 lightDirectionAndRotation{0.0f, -1.0f, 0.0f, 0.0f};
-  glm::vec4 lightColorAndPrefilterMip{1.0f, 1.0f, 1.0f, 0.0f};
+  glm::vec4 environmentParams{0.0f, 0.0f, 0.0f, 0.0f};
   glm::vec4 specularTuning{2.0f, 0.0f, 0.0f, 0.0f};
-  glm::uvec4 settings{0u, 0u, 0u, 0u};
+  alignas(16) glm::uvec4 settings{0u, 0u, 0u, 0u};
+  std::array<PbrLightUniformData, MAX_PBR_LIGHTS> lights{};
 };
 
 class PbrPass : public FullscreenRenderPass {
@@ -37,17 +54,17 @@ public:
 
   PbrPass(PipelineSpec spec, uint32_t framesInFlight,
           const GeometryPass *sourcePass = nullptr)
-      : FullscreenRenderPass(std::move(spec), framesInFlight,
-                             RasterPassAttachmentConfig{
-                                 .useColorAttachment = true,
-                                 .useDepthAttachment = false,
-                                 .useMsaaColorAttachment = false,
-                                 .resolveToSwapchain = false,
-                                 .useSwapchainColorAttachment = false,
-                                 .offscreenColorFormat =
-                                     vk::Format::eR16G16B16A16Sfloat,
-                                 .sampleColorAttachment = true,
-                             }),
+      : FullscreenRenderPass(
+            std::move(spec), framesInFlight,
+            RasterPassAttachmentConfig{
+                .useColorAttachment = true,
+                .useDepthAttachment = false,
+                .useMsaaColorAttachment = false,
+                .resolveToSwapchain = false,
+                .useSwapchainColorAttachment = false,
+                .offscreenColorFormat = vk::Format::eR16G16B16A16Sfloat,
+                .sampleColorAttachment = true,
+            }),
         sourcePassRef(sourcePass) {}
 
   void setSourcePass(const GeometryPass &sourcePass) {
@@ -56,40 +73,63 @@ public:
 
   void setImageBasedLighting(const ImageBasedLighting &imageBasedLighting) {
     ibl = &imageBasedLighting;
-    pushData.lightColorAndPrefilterMip.w = ibl->maxPrefilterMipLevel();
+    uniformData.environmentParams.y = ibl->maxPrefilterMipLevel();
   }
 
   void setCamera(const glm::mat4 &proj, const glm::mat4 &view) {
-    pushData.projParams =
+    viewMatrix = view;
+    uniformData.projParams =
         glm::vec4(proj[0][0], proj[1][1], proj[2][2], proj[3][2]);
 
     const glm::mat4 invView = glm::inverse(view);
-    pushData.viewRightAndBackground =
-        glm::vec4(glm::normalize(glm::vec3(invView[0])), pushData.viewRightAndBackground.w);
-    pushData.viewUpAndDiffuse =
-        glm::vec4(glm::normalize(glm::vec3(invView[1])), pushData.viewUpAndDiffuse.w);
-    pushData.viewForwardAndSpecular = glm::vec4(
-        glm::normalize(-glm::vec3(invView[2])),
-        pushData.viewForwardAndSpecular.w);
+    uniformData.viewRightAndBackground =
+        glm::vec4(glm::normalize(glm::vec3(invView[0])),
+                  uniformData.viewRightAndBackground.w);
+    uniformData.viewUpAndDiffuse = glm::vec4(
+        glm::normalize(glm::vec3(invView[1])), uniformData.viewUpAndDiffuse.w);
+    uniformData.viewForwardAndSpecular =
+        glm::vec4(glm::normalize(-glm::vec3(invView[2])),
+                  uniformData.viewForwardAndSpecular.w);
   }
 
-  void setDirectionalLight(const glm::vec3 &directionViewSpace,
-                           const glm::vec3 &color) {
-    pushData.lightDirectionAndRotation =
-        glm::vec4(glm::normalize(directionViewSpace), 0.0f);
-    pushData.lightColorAndPrefilterMip =
-        glm::vec4(color, pushData.lightColorAndPrefilterMip.w);
+  void setSceneLights(const SceneLightSet &sceneLights) {
+    uint32_t lightCount = 0;
+    for (auto &lightUniform : uniformData.lights) {
+      lightUniform = PbrLightUniformData{};
+    }
+
+    for (const auto &light : sceneLights.lights()) {
+      if (!light.enabled || lightCount >= MAX_PBR_LIGHTS) {
+        continue;
+      }
+
+      auto &lightUniform = uniformData.lights[lightCount];
+      const glm::vec3 directionView =
+          glm::normalize(glm::mat3(viewMatrix) * light.direction);
+      lightUniform.directionAndRange =
+          glm::vec4(directionView, std::max(light.range, 0.01f));
+      lightUniform.colorAndIntensity =
+          glm::vec4(light.color, std::max(light.intensity, 0.0f));
+      lightUniform.positionAndType =
+          glm::vec4(glm::vec3(viewMatrix * glm::vec4(light.position, 1.0f)),
+                    static_cast<float>(light.type));
+      lightUniform.spotAngles =
+          glm::vec4(std::cos(light.innerConeAngleRadians),
+                    std::cos(light.outerConeAngleRadians), 0.0f, 0.0f);
+      ++lightCount;
+    }
+
+    uniformData.settings.z = lightCount;
   }
 
   void setEnvironmentControls(float environmentRotationRadians,
-                              float backgroundIntensity,
-                              float diffuseIntensity,
+                              float backgroundIntensity, float diffuseIntensity,
                               float specularIntensity, bool enableIbl,
                               bool showBackground) {
-    pushData.viewRightAndBackground.w = backgroundIntensity;
-    pushData.viewUpAndDiffuse.w = diffuseIntensity;
-    pushData.viewForwardAndSpecular.w = specularIntensity;
-    pushData.lightDirectionAndRotation.w = environmentRotationRadians;
+    uniformData.viewRightAndBackground.w = backgroundIntensity;
+    uniformData.viewUpAndDiffuse.w = diffuseIntensity;
+    uniformData.viewForwardAndSpecular.w = specularIntensity;
+    uniformData.environmentParams.x = environmentRotationRadians;
 
     uint32_t flags = 0;
     if (enableIbl) {
@@ -98,39 +138,33 @@ public:
     if (showBackground) {
       flags |= ShowBackground;
     }
-    pushData.settings.x = flags;
+    uniformData.settings.x = flags;
   }
 
   void setDebugView(PbrDebugView debugView) {
-    pushData.settings.y = static_cast<uint32_t>(debugView);
+    uniformData.settings.y = static_cast<uint32_t>(debugView);
   }
 
   void setDielectricSpecularScale(float scale) {
-    pushData.specularTuning.x = std::max(scale, 0.0f);
+    uniformData.specularTuning.x = std::max(scale, 0.0f);
   }
 
 protected:
-  std::vector<FullscreenImageInputBinding> imageInputBindings() const override {
-    return {
-        {.binding = 0},
-        {.binding = 1},
-        {.binding = 2},
-        {.binding = 3},
-        {.binding = 4},
-        {.binding = 5},
-        {.binding = 6},
-        {.binding = 7},
-        {.binding = 8},
-    };
+  std::vector<DescriptorBindingSpec>
+  secondaryDescriptorBindings() const override {
+    return {{
+        .binding = 0,
+        .descriptorType = vk::DescriptorType::eUniformBuffer,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eFragment,
+    }};
   }
 
-  std::vector<vk::PushConstantRange> pushConstantRanges() const override {
+  std::vector<FullscreenImageInputBinding> imageInputBindings() const override {
     return {
-        vk::PushConstantRange{
-            .stageFlags = vk::ShaderStageFlagBits::eFragment,
-            .offset = 0,
-            .size = sizeof(PbrPassPushConstant),
-        },
+        {.binding = 0}, {.binding = 1}, {.binding = 2},
+        {.binding = 3}, {.binding = 4}, {.binding = 5},
+        {.binding = 6}, {.binding = 7}, {.binding = 8},
     };
   }
 
@@ -163,23 +197,32 @@ protected:
     };
   }
 
+  void initializeAdditionalPassResources(DeviceContext &deviceContext,
+                                         SwapchainContext &) override {
+    lightUniformSet.initialize(deviceContext, passDescriptorSetLayout(1),
+                               framesInFlight());
+  }
+
   void bindAdditionalPassResources(const RenderPassContext &context) override {
-    context.commandBuffer.pushConstants<PbrPassPushConstant>(
-        *pipelineLayoutHandle(), vk::ShaderStageFlagBits::eFragment, 0,
-        {pushData});
+    lightUniformSet.write(context.frameIndex, uniformData);
+    lightUniformSet.bind(context.commandBuffer, pipelineLayoutHandle(),
+                         context.frameIndex, 1);
   }
 
 private:
   const GeometryPass *sourcePassRef = nullptr;
   const ImageBasedLighting *ibl = nullptr;
-  PbrPassPushConstant pushData{};
+  glm::mat4 viewMatrix{1.0f};
+  PbrPassUniformData uniformData{};
+  PassUniformSet<PbrPassUniformData> lightUniformSet;
 
   void validateResources() const {
     if (sourcePassRef == nullptr) {
       throw std::runtime_error("PbrPass requires a GeometryPass source");
     }
     if (ibl == nullptr) {
-      throw std::runtime_error("PbrPass requires image-based lighting resources");
+      throw std::runtime_error(
+          "PbrPass requires image-based lighting resources");
     }
   }
 };
