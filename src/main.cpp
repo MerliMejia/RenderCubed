@@ -1,11 +1,13 @@
 #include "backend/AppWindow.h"
 #include "backend/BackendConfig.h"
 #include "backend/VulkanBackend.h"
-#include "passes/DebugPass.h"
+#include "passes/DebugOverlayPass.h"
+#include "passes/DebugPresentPass.h"
 #include "passes/GeometryPass.h"
 #include "passes/ImGuiPass.h"
 #include "passes/PbrPass.h"
 #include "passes/TonemapPass.h"
+#include "renderable/DebugLightMeshes.h"
 #include "renderable/FrameGeometryUniforms.h"
 #include "renderable/RenderableModel.h"
 #include "renderable/Sampler.h"
@@ -54,13 +56,17 @@ private:
 
   RenderableModel sceneModel;
   FullscreenMesh lightQuad;
+  TypedMesh<Vertex> pointLightMarkerMesh;
+  TypedMesh<Vertex> spotLightMarkerMesh;
+  TypedMesh<Vertex> directionalLightMarkerMesh;
   FrameGeometryUniforms frameGeometryUniforms;
   Sampler sampler;
   ImageBasedLighting imageBasedLighting;
   GeometryPass *geometryPass = nullptr;
   PbrPass *pbrPass = nullptr;
   TonemapPass *tonemapPass = nullptr;
-  DebugPass *debugPass = nullptr;
+  DebugPresentPass *debugPresentPass = nullptr;
+  DebugOverlayPass *debugOverlayPass = nullptr;
   ImGuiPass *imguiPass = nullptr;
 
   std::chrono::steady_clock::time_point lastFrameTime =
@@ -92,7 +98,7 @@ private:
                                      .targetPass = tonemapPass});
     renderItems.push_back(RenderItem{.mesh = &lightQuad,
                                      .descriptorBindings = nullptr,
-                                     .targetPass = debugPass});
+                                     .targetPass = debugPresentPass});
   }
 
   void reloadSceneModel() {
@@ -116,6 +122,20 @@ private:
     lightQuad = buildFullscreenQuadMesh();
     lightQuad.createVertexBuffer(commandContext(), deviceContext());
     lightQuad.createIndexBuffer(commandContext(), deviceContext());
+
+    pointLightMarkerMesh = buildPointLightMarkerMesh();
+    pointLightMarkerMesh.createVertexBuffer(commandContext(), deviceContext());
+    pointLightMarkerMesh.createIndexBuffer(commandContext(), deviceContext());
+
+    spotLightMarkerMesh = buildSpotLightMarkerMesh();
+    spotLightMarkerMesh.createVertexBuffer(commandContext(), deviceContext());
+    spotLightMarkerMesh.createIndexBuffer(commandContext(), deviceContext());
+
+    directionalLightMarkerMesh = buildDirectionalLightMarkerMesh();
+    directionalLightMarkerMesh.createVertexBuffer(commandContext(),
+                                                  deviceContext());
+    directionalLightMarkerMesh.createIndexBuffer(commandContext(),
+                                                 deviceContext());
 
     auto geometryPassLocal = std::make_unique<GeometryPass>(
         PipelineSpec{.shaderPath = ASSET_PATH + "/shaders/geometry_pass.spv",
@@ -147,17 +167,36 @@ private:
     tonemapPass = tonemapPassLocal.get();
     renderer.addPass(std::move(tonemapPassLocal));
 
-    auto debugPassLocal = std::make_unique<DebugPass>(
+    auto debugPresentPassLocal = std::make_unique<DebugPresentPass>(
         PipelineSpec{.shaderPath =
                          ASSET_PATH + "/shaders/debug_gbuffer_pass.spv",
                      .enableDepthTest = false,
                      .enableDepthWrite = false},
         MAX_FRAMES_IN_FLIGHT, geometryPassPtr, pbrPass, tonemapPass);
-    debugPass = debugPassLocal.get();
-    debugPass->setSelectedOutput(
+    debugPresentPass = debugPresentPassLocal.get();
+    debugPresentPass->setSelectedOutput(
         static_cast<uint32_t>(debugUiSettings.presentedOutput));
-    debugPass->setClipPlanes(CAMERA_NEAR_PLANE, debugUiSettings.cameraFarPlane);
-    renderer.addPass(std::move(debugPassLocal));
+    debugPresentPass->setClipPlanes(CAMERA_NEAR_PLANE,
+                                    debugUiSettings.cameraFarPlane);
+    renderer.addPass(std::move(debugPresentPassLocal));
+
+    auto debugOverlayPassLocal = std::make_unique<DebugOverlayPass>(
+        PipelineSpec{.shaderPath =
+                         ASSET_PATH + "/shaders/debug_overlay_pass.spv",
+                     .topology = vk::PrimitiveTopology::eLineList,
+                     .cullMode = vk::CullModeFlagBits::eNone,
+                     .enableDepthTest = false,
+                     .enableDepthWrite = false,
+                     .enableBlending = true},
+        MAX_FRAMES_IN_FLIGHT, &debugUiSettings.sceneLights);
+    debugOverlayPass = debugOverlayPassLocal.get();
+    debugOverlayPass->setPointMarkerMesh(pointLightMarkerMesh);
+    debugOverlayPass->setSpotMarkerMesh(spotLightMarkerMesh);
+    debugOverlayPass->setDirectionalMarkerMesh(directionalLightMarkerMesh);
+    debugOverlayPass->setMarkersVisible(debugUiSettings.lightMarkersVisible);
+    debugOverlayPass->setMarkerScale(debugUiSettings.lightMarkerScale);
+    debugOverlayPass->setDirectionalAnchor(debugUiSettings.modelPosition);
+    renderer.addPass(std::move(debugOverlayPassLocal));
 
     auto imguiPassLocal = std::make_unique<ImGuiPass>(
         window, backend.instance(), commandContext());
@@ -239,11 +278,11 @@ private:
         sceneModel.syncMaterialParameters();
       }
       imguiPass->endFrame();
-      if (debugPass != nullptr) {
-        debugPass->setSelectedOutput(
+      if (debugPresentPass != nullptr) {
+        debugPresentPass->setSelectedOutput(
             static_cast<uint32_t>(debugUiSettings.presentedOutput));
-        debugPass->setClipPlanes(CAMERA_NEAR_PLANE,
-                                 debugUiSettings.cameraFarPlane);
+        debugPresentPass->setClipPlanes(CAMERA_NEAR_PLANE,
+                                        debugUiSettings.cameraFarPlane);
       }
       if (uiResult.iblBakeRequested) {
         backend.waitIdle();
@@ -314,6 +353,14 @@ private:
       pbrPass->setDielectricSpecularScale(
           debugUiSettings.dielectricSpecularScale);
       pbrPass->setDebugView(debugUiSettings.pbrDebugView);
+    }
+    if (debugOverlayPass != nullptr) {
+      debugOverlayPass->setCamera(geometryUniformData.view,
+                                  geometryUniformData.proj);
+      debugOverlayPass->setSceneLights(debugUiSettings.sceneLights);
+      debugOverlayPass->setMarkersVisible(debugUiSettings.lightMarkersVisible);
+      debugOverlayPass->setMarkerScale(debugUiSettings.lightMarkerScale);
+      debugOverlayPass->setDirectionalAnchor(debugUiSettings.modelPosition);
     }
     if (tonemapPass != nullptr) {
       const glm::vec3 lightRadiance = estimatedSceneLightRadiance();

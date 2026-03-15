@@ -28,12 +28,14 @@ enum class PresentedOutput : uint32_t {
 };
 
 struct DefaultDebugUISettings {
-  PresentedOutput presentedOutput = PresentedOutput::TonemapPass;
+  PresentedOutput presentedOutput = PresentedOutput::PbrPass;
   PbrDebugView pbrDebugView = PbrDebugView::Final;
   int selectedMaterialIndex = 0;
   int selectedLightIndex = 0;
 
   SceneLightSet sceneLights = SceneLightSet::showcaseLights();
+  bool lightMarkersVisible = true;
+  float lightMarkerScale = 0.35f;
 
   float exposure = 1.0f;
   float autoExposureKey = 2.5f;
@@ -365,6 +367,8 @@ private:
         settings.selectedLightIndex, 0, static_cast<int>(lights.size()) - 1);
 
     ImGui::SeparatorText("Scene Lights");
+    ImGui::Checkbox("Show Markers", &settings.lightMarkersVisible);
+    ImGui::SliderFloat("Marker Scale", &settings.lightMarkerScale, 0.05f, 2.5f);
     for (int index = 0; index < static_cast<int>(lights.size()); ++index) {
       const SceneLight &light = lights[static_cast<size_t>(index)];
       std::string label = light.name + "##light_" + std::to_string(index);
@@ -381,6 +385,14 @@ private:
     ImGui::Checkbox("Enabled", &light.enabled);
     ImGui::ColorEdit3("Color", &light.color.x);
     ImGui::SliderFloat("Intensity", &light.intensity, 0.0f, 50.0f);
+
+    if (light.type == SceneLightType::Directional) {
+      ImGui::BeginDisabled();
+      glm::vec3 directionalPosition(0.0f, 0.0f, 0.0f);
+      ImGui::DragFloat3("Position", &directionalPosition.x, 0.05f);
+      ImGui::EndDisabled();
+      ImGui::TextUnformatted("Directional lights use direction only.");
+    }
 
     if (light.type == SceneLightType::Directional ||
         light.type == SceneLightType::Spot) {
@@ -403,6 +415,7 @@ private:
 
     if (light.type == SceneLightType::Point ||
         light.type == SceneLightType::Spot) {
+      ImGui::SeparatorText("Transform");
       ImGui::DragFloat3("Position", &light.position.x, 0.05f);
       ImGui::SliderFloat("Range", &light.range, 0.5f, 25.0f);
       light.range = std::max(light.range, 0.01f);
